@@ -54,6 +54,9 @@ docker_start_mysql_keycloak:
 docker_start_mysql_rebuild:
 	docker compose -f docker-compose.mysql.yaml up --build -d
 
+docker_start_mysql_keycloak_rebuild:
+	docker compose -f docker-compose.mysql.keycloak.yaml up --build -d
+
 docker_stop_mysql:
 	docker compose -f docker-compose.mysql.yaml down
 

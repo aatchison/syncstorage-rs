@@ -46,7 +46,10 @@ clean:
 	rm -r venv
 
 docker_start_mysql:
-	docker compose -f docker-compose.mysql.yaml up -d
+	docker compose -f docker-compose.mysql.yaml up -w
+
+docker_start_mysql_keycloak:
+	docker compose -f docker-compose.mysql.keycloak.yaml up -w
 
 docker_start_mysql_rebuild:
 	docker compose -f docker-compose.mysql.yaml up --build -d

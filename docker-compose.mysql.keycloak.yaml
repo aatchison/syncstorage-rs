@@ -10,12 +10,12 @@
 
 version: "3"
 services:
-  diag:
-    image: ubuntu:latest
-    restart: always
-    # networks:
-    #   - local_network
-    command: tail -F anything
+  # diag:
+  #   image: ubuntu:latest
+  #   restart: always
+  #   # networks:
+  #   #   - local_network
+  #   command: tail -F anything
 
   sync-db:
     image: docker.io/library/mysql:5.7
@@ -63,14 +63,14 @@ services:
     # networks:
     #   - local_network
 
-  keycloak-db:
-    image: postgres:latest
-    environment:
-      POSTGRES_DB: postgres
-      POSTGRES_USER: admin
-      POSTGRES_PASSWORD: admin
-    ports:
-      - "5432:5432"
+  # keycloak-db:
+  #   image: postgres:latest
+  #   environment:
+  #     POSTGRES_DB: postgres
+  #     POSTGRES_USER: admin
+  #     POSTGRES_PASSWORD: admin
+  #   ports:
+  #     - "5432:5432"
     # networks:
     #   - local_network
 
@@ -90,8 +90,8 @@ services:
       timeout: 2s
       retries: 15
     command: ["start-dev", "--http-port", "7080", "--https-port", "7443", "--import-realm"]
-    # volumes: # Ignore if you don't have realm-export.json to migrate data
-    #   - ../keycloak/realm-export.json:/opt/keycloak/data/import/realm-export.json
+    volumes: # Ignore if you don't have realm-export.json to migrate data
+      - ./keycloak/realm-export.json:/opt/keycloak/data/import/realm-export.json
     ports:
       - "7080:7080"
       - "7443:7443"

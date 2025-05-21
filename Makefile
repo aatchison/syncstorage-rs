@@ -60,6 +60,9 @@ docker_start_mysql_keycloak_rebuild:
 docker_stop_mysql:
 	docker compose -f docker-compose.mysql.yaml down
 
+docker_stop_mysql_keycloak:
+	docker compose -f docker-compose.mysql.keycloak.yaml down
+
 docker_start_spanner:
 	docker compose -f docker-compose.spanner.yaml up -d
 
@@ -74,6 +77,19 @@ docker_run_mysql_e2e_tests:
 	docker compose \
 		-f docker-compose.mysql.yaml \
 		-f docker-compose.e2e.mysql.yaml \
+	 	up \
+	 	--exit-code-from mysql-e2e-tests \
+	 	--abort-on-container-exit;
+	exit_code=$$?;
+	docker cp mysql-e2e-tests:/mysql_integration_results.xml ${MYSQL_INT_JUNIT_XML};
+	docker cp mysql-e2e-tests:/mysql_no_jwk_integration_results.xml ${MYSQL_NO_JWK_INT_JUNIT_XML};
+	exit $$exit_code;
+
+.ONESHELL:
+docker_run_mysql_keycloak_e2e_tests:
+	docker compose \
+		-f docker-compose.mysql.keycloak.yaml \
+		-f docker-compose.e2e.mysql.keycloak.yaml \
 	 	up \
 	 	--exit-code-from mysql-e2e-tests \
 	 	--abort-on-container-exit;

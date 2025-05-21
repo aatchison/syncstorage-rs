@@ -32,23 +32,23 @@ public_client_jwt = response.json()["access_token"]
 print("get private client token")
 
 
-confidential_client_secret = "YcdeiCc742lOk17poGhWT51GTAWMnQMr"
-keycloak_server_url = "http://localhost:7080/realms/sync/protocol/openid-connect/token"
+# confidential_client_secret = "YcdeiCc742lOk17poGhWT51GTAWMnQMr"
+# keycloak_server_url = "http://localhost:7080/realms/sync/protocol/openid-connect/token"
 
-data = {
-    'grant_type': 'client_credentials',
-    'client_id': 'confidential-client',
-    'scope': 'openid',
-    'client_secret': confidential_client_secret
-}
+# data = {
+#     'grant_type': 'client_credentials',
+#     'client_id': 'confidential-client',
+#     'scope': 'openid',
+#     'client_secret': confidential_client_secret
+# }
 
-response = requests.post(keycloak_server_url, data)
-print(f"GET status code: {response.status_code}")
-# print(f"GET response content: {response.json()}")
-# print(f"GET response content id_token: {response.json()["id_token"]}")
+# response = requests.post(keycloak_server_url, data)
+# print(f"GET status code: {response.status_code}")
+# # print(f"GET response content: {response.json()}")
+# # print(f"GET response content id_token: {response.json()["id_token"]}")
 
-print(f"GET response content access_token: {response.json()["access_token"]}")
-private_client_jwt = response.json()["access_token"]
+# print(f"GET response content access_token: {response.json()["access_token"]}")
+# private_client_jwt = response.json()["access_token"]
 
 
 
@@ -73,7 +73,7 @@ print(f"GET status code: {response.status_code}")
 
 jwks_client = jwt.PyJWKClient(keycloak_server_url)
 signing_key = jwks_client.get_signing_key_from_jwt(public_client_jwt)
-decoded_token = jwt.decode(private_client_jwt, signing_key.key, algorithms=["RS256"], audience="account")
+decoded_token = jwt.decode(public_client_jwt, signing_key.key, algorithms=["RS256"], audience="account")
 print(decoded_token)
 
 # print("decode public client wt token")

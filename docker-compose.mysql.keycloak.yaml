@@ -10,12 +10,6 @@
 
 version: "3"
 services:
-  # diag:
-  #   image: ubuntu:latest
-  #   restart: always
-  #   # networks:
-  #   #   - local_network
-  #   command: tail -F anything
 
   sync-db:
     image: docker.io/library/mysql:5.7
@@ -37,8 +31,6 @@ services:
       retries: 10
       start_period: 20s
       timeout: 2s
-    # networks:
-    #   - local_network
 
   tokenserver-db:
     image: docker.io/library/mysql:5.7
@@ -60,53 +52,6 @@ services:
       retries: 10
       start_period: 20s
       timeout: 2s
-    # networks:
-    #   - local_network
-
-  # keycloak-db:
-  #   image: postgres:latest
-  #   environment:
-  #     POSTGRES_DB: postgres
-  #     POSTGRES_USER: admin
-  #     POSTGRES_PASSWORD: admin
-  #   ports:
-  #     - "5432:5432"
-    # networks:
-    #   - local_network
-
-  keycloak:
-    image: quay.io/keycloak/keycloak:latest
-    environment:
-      KC_HOSTNAME: localhost
-      KC_HOSTNAME_PORT: 7080
-      KC_HOSTNAME_STRICT_BACKCHANNEL: "true"
-      KEYCLOAK_ADMIN: admin
-      KEYCLOAK_ADMIN_PASSWORD: admin
-      KC_HEALTH_ENABLED: "true"
-      KC_LOG_LEVEL: info
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:7080/health/ready"]
-      interval: 15s
-      timeout: 2s
-      retries: 15
-    command: ["start-dev", "--http-port", "7080", "--https-port", "7443", "--import-realm"]
-    volumes: # Ignore if you don't have realm-export.json to migrate data
-      - ./keycloak/realm-export.json:/opt/keycloak/data/import/realm-export.json
-    ports:
-      - "7080:7080"
-      - "7443:7443"
-    # networks:
-    #   - local_network
-
-  mock-fxa-server:
-    image: app:build
-    restart: "no"
-    entrypoint: "sh scripts/start_mock_fxa_server.sh"
-    environment:
-      MOCK_FXA_SERVER_HOST: 0.0.0.0
-      MOCK_FXA_SERVER_PORT: 6000
-    # networks:
-    #   - local_network
 
   syncserver:
     # NOTE: The naming in the rest of this repository has been updated to reflect the fact
@@ -129,12 +74,28 @@ services:
       SYNC_TOKENSERVER__DATABASE_URL: mysql://test:test@tokenserver-db:3306/tokenserver
       SYNC_TOKENSERVER__RUN_MIGRATIONS: "true"
       RUST_BACKTRACE: 1
-    # networks:
-    #   - local_network
 
-# networks:
-#   local_network:
-#     driver: bridge
+  keycloak:
+    image: quay.io/keycloak/keycloak:latest
+    environment:
+      KC_HOSTNAME: localhost
+      KC_HOSTNAME_PORT: 7080
+      KC_HOSTNAME_STRICT_BACKCHANNEL: "true"
+      KEYCLOAK_ADMIN: admin
+      KEYCLOAK_ADMIN_PASSWORD: admin
+      KC_HEALTH_ENABLED: "true"
+      KC_LOG_LEVEL: info
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:7080/health/ready"]
+      interval: 15s
+      timeout: 2s
+      retries: 15
+    command: ["start-dev", "--http-port", "7080", "--https-port", "7443", "--import-realm"]
+    volumes: # Ignore if you don't have realm-export.json to migrate data
+      - ./keycloak/realm-export.json:/opt/keycloak/data/import/realm-export.json
+    ports:
+      - "7080:7080"
+      - "7443:7443"
 
 volumes:
   sync_db_data:

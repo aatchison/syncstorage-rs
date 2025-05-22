@@ -2,8 +2,6 @@
 # Collection of helper scripts used for local dev.
 ##
 
-# This key can live anywhere on your machine. Adjust path as needed.
-PATH_TO_SYNC_SPANNER_KEYS = `pwd`/service-account.json
 
 # TODO: replace with rust grpc alternative when ready
 # Assumes you've cloned the server-syncstorage repo locally into a peer dir.
@@ -21,8 +19,6 @@ TEST_FILE_PREFIX := $(if $(CIRCLECI),$(CIRCLE_BUILD_NUM)__$(EPOCH_TIME)__$(CIRCL
 UNIT_JUNIT_XML := $(TEST_RESULTS_DIR)/$(TEST_FILE_PREFIX)unit__results.xml
 UNIT_COVERAGE_JSON := $(TEST_RESULTS_DIR)/$(TEST_FILE_PREFIX)unit__coverage.json
 
-SPANNER_INT_JUNIT_XML := $(TEST_RESULTS_DIR)/$(TEST_FILE_PREFIX)spanner_integration__results.xml
-SPANNER_NO_JWK_INT_JUNIT_XML := $(TEST_RESULTS_DIR)/$(TEST_FILE_PREFIX)spanner_no_oauth_integration__results.xml
 MYSQL_INT_JUNIT_XML := $(TEST_RESULTS_DIR)/$(TEST_FILE_PREFIX)mysql_integration__results.xml
 MYSQL_NO_JWK_INT_JUNIT_XML := $(TEST_RESULTS_DIR)/$(TEST_FILE_PREFIX)mysql_no_oauth_integration__results.xml
 
@@ -36,10 +32,6 @@ PYTHON_SITE_PACKGES = $(shell $(SRC_ROOT)/venv/bin/python -c "from distutils.sys
 clippy_mysql:
 	# Matches what's run in circleci
 	cargo clippy --workspace --all-targets --no-default-features --features=syncstorage-db/mysql --features=py_verifier -- -D warnings
-
-clippy_spanner:
-	# Matches what's run in circleci
-	cargo clippy --workspace --all-targets --no-default-features --features=syncstorage-db/spanner --features=py_verifier -- -D warnings
 
 clean:
 	cargo clean
@@ -62,15 +54,6 @@ docker_stop_mysql:
 
 docker_stop_mysql_keycloak:
 	docker compose -f docker-compose.mysql.keycloak.yaml down
-
-docker_start_spanner:
-	docker compose -f docker-compose.spanner.yaml up -d
-
-docker_start_spanner_rebuild:
-	docker compose -f docker-compose.spanner.yaml up --build -d
-
-docker_stop_spanner:
-	docker compose -f docker-compose.spanner.yaml down
 
 .ONESHELL:
 docker_run_mysql_e2e_tests:
@@ -98,19 +81,6 @@ docker_run_mysql_keycloak_e2e_tests:
 	docker cp mysql-e2e-tests:/mysql_no_jwk_integration_results.xml ${MYSQL_NO_JWK_INT_JUNIT_XML};
 	exit $$exit_code;
 
-.ONESHELL:
-docker_run_spanner_e2e_tests:
-	docker compose \
-		-f docker-compose.spanner.yaml \
-		-f docker-compose.e2e.spanner.yaml \
-	 	up \
-	 	--exit-code-from spanner-e2e-tests \
-	 	--abort-on-container-exit; 
-	exit_code=$$?;
-	docker cp spanner-e2e-tests:/spanner_integration_results.xml ${SPANNER_INT_JUNIT_XML};
-	docker cp spanner-e2e-tests:/spanner_no_jwk_integration_results.xml ${SPANNER_NO_JWK_INT_JUNIT_XML};
-	exit $$exit_code;
-
 python:
 	python3 -m venv venv
 	venv/bin/python -m pip install -r requirements.txt
@@ -123,17 +93,6 @@ run_mysql: python
 	        RUST_LOG=debug \
 		RUST_BACKTRACE=full \
 		cargo run --no-default-features --features=syncstorage-db/mysql --features=py_verifier -- --config config/local.toml
-
-run_spanner: python
-	GOOGLE_APPLICATION_CREDENTIALS=$(PATH_TO_SYNC_SPANNER_KEYS) \
-		GRPC_DEFAULT_SSL_ROOTS_FILE_PATH=$(PATH_TO_GRPC_CERT) \
-		# See https://github.com/PyO3/pyo3/issues/1741 for discussion re: why we need to set the
-		# below env var
-		PYTHONPATH=$(PYTHON_SITE_PACKGES) \
-	    PATH="./venv/bin:$(PATH)" \
-		RUST_LOG=debug \
-		RUST_BACKTRACE=full \
-		cargo run --no-default-features --features=syncstorage-db/spanner --features=py_verifier -- --config config/local.toml
 
 .ONESHELL:
 test:

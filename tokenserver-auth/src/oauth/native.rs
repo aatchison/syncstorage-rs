@@ -10,7 +10,13 @@ use syncserver_common::Metrics;
 use tokenserver_common::TokenserverError;
 use tokenserver_settings::Settings;
 
+// original sync scope --Arron
+#[cfg(not(feature = "keycloak"))]
 const SYNC_SCOPE: &str = "https://identity.mozilla.com/apps/oldsync";
+
+// this scope string is from a keycloak configuration example, I think it will ultimately need to be changed.  --Arron
+#[cfg(feature = "keycloak")]
+const SYNC_SCOPE: &str = "openid email profile";
 
 #[derive(Serialize, Deserialize, Debug)]
 struct TokenClaims {

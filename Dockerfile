@@ -1,4 +1,4 @@
-ARG DATABASE_BACKEND=spanner
+ARG DATABASE_BACKEND=mysql
 # Alternatively MYSQLCLIENT_PKG=libmysqlclient-dev for the Oracle/MySQL official client
 ARG MYSQLCLIENT_PKG=libmariadb-dev-compat
 
@@ -15,18 +15,8 @@ FROM chef AS cacher
 ARG DATABASE_BACKEND
 ARG MYSQLCLIENT_PKG
 
-# cmake is required to build grpcio-sys for Spanner builds
-RUN \
-    if [ "$MYSQLCLIENT_PKG" = libmysqlclient-dev ] ; then \
-        # Fetch and load the MySQL public key.
-        wget -qO- https://repo.mysql.com/RPM-GPG-KEY-mysql-2023 > /etc/apt/trusted.gpg.d/mysql.asc && \
-        echo "deb https://repo.mysql.com/apt/debian/ bullseye mysql-8.0" >> /etc/apt/sources.list ; \
-    fi && \
-    apt-get -q update && \
-    apt-get -q install -y --no-install-recommends $MYSQLCLIENT_PKG cmake
-
 COPY --from=planner /app/recipe.json recipe.json
-RUN cargo chef cook --release --no-default-features --features=syncstorage-db/$DATABASE_BACKEND  --recipe-path recipe.json
+RUN cargo chef cook --release --no-default-features --features="syncstorage-db/mysql, keycloak"  --recipe-path recipe.json
 
 FROM chef AS builder
 ARG DATABASE_BACKEND
@@ -56,7 +46,7 @@ ENV PATH=$PATH:/root/.cargo/bin
 RUN \
     cargo --version && \
     rustc --version && \
-    cargo install --path ./syncserver --no-default-features --features=syncstorage-db/$DATABASE_BACKEND --locked --root /app && \
+    cargo install --path ./syncserver --no-default-features --features="syncstorage-db/mysql, keycloak" --locked --root /app && \
     if [ "$DATABASE_BACKEND" = "spanner" ] ; then cargo install --path ./syncstorage-spanner --locked --root /app --bin purge_ttl ; fi
 
 FROM docker.io/library/debian:bullseye-slim
@@ -91,14 +81,10 @@ RUN \
 
 COPY --from=builder /app/bin /app/bin
 COPY --from=builder /app/syncserver/version.json /app
-COPY --from=builder /app/tools/spanner /app/tools/spanner
 COPY --from=builder /app/tools/integration_tests /app/tools/integration_tests
 COPY --from=builder /app/tools/tokenserver /app/tools/tokenserver
-COPY --from=builder /app/scripts/prepare-spanner.sh /app/scripts/prepare-spanner.sh
 COPY --from=builder /app/scripts/start_mock_fxa_server.sh /app/scripts/start_mock_fxa_server.sh
-COPY --from=builder /app/syncstorage-spanner/src/schema.ddl /app/schema.ddl
 
-RUN chmod +x /app/scripts/prepare-spanner.sh
 RUN pip3 install -r /app/tools/integration_tests/requirements.txt
 RUN pip3 install -r /app/tools/tokenserver/requirements.txt
 

@@ -8,7 +8,6 @@ members = [
   "syncstorage-db-common",
   "syncstorage-mysql",
   "syncstorage-settings",
-  "syncstorage-spanner",
   "tokenserver-auth",
   "tokenserver-common",
   "tokenserver-db",
@@ -30,7 +29,7 @@ license = "MPL-2.0"
 
 [workspace.dependencies]
 actix-web = "4"
-
+cmake = "0.1.54"
 docopt = "1.1"
 base64 = "0.22"
 

@@ -37,5 +37,6 @@ mockito = "1.4.0"
 tokio = { workspace = true, features = ["macros"] }
 
 [features]
-default = ["py"]
+default = ["keycloak"]
 py = ["pyo3"]
+keycloak = []

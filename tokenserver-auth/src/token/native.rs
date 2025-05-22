@@ -9,6 +9,11 @@ use tokenserver_common::TokenserverError;
 // https://github.com/mozilla-services/tokenlib/blob/91ec9e2c922e55306eddba1394590a88f3b10602/tokenlib/__init__.py#L43-L45
 // We could change them, but we'd want to make sure that we also change them syncstorage, however
 // that would cause temporary auth issues for anyone with an old pre-new-value token
+
+// #[cfg(feature = "keycloak")]
+
+
+// These are jsut byte strings of the url? -- Arron
 const HKDF_SIGNING_INFO: &[u8] = b"services.mozilla.com/tokenlib/v1/signing";
 const HKDF_INFO_DERIVE: &[u8] = b"services.mozilla.com/tokenlib/v1/derive/";
 

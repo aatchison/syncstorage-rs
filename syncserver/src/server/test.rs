@@ -68,12 +68,6 @@ fn get_test_settings() -> Settings {
             &settings.syncstorage.database_url
         )
     }
-    if cfg!(feature = "spanner") && !&settings.syncstorage.uses_spanner() {
-        panic!(
-            "MySQL database_url specified for Spanner feature, please correct.\n\t{}",
-            &settings.syncstorage.database_url
-        )
-    }
     settings.port = port;
     settings.host = host;
     settings.syncstorage.database_pool_max_size = pool_size + 1;

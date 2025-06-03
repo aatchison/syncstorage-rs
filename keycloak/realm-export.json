@@ -2541,7 +2541,7 @@
     "saml.signature.algorithm": "",
     "parRequestUriLifespan": "60",
     "clientSessionMaxLifespan": "0",
-    "frontendUrl": "/sync/*",
+    "frontendUrl": "",
     "acr.loa.map": "{}"
   },
   "keycloakVersion": "26.2.4",

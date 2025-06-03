@@ -67,12 +67,21 @@ services:
         condition: service_healthy
       tokenserver-db:
         condition: service_healthy
+      keycloak:
+        condition: service_healthy
     environment:
       SYNC_HOST: 0.0.0.0
       SYNC_MASTER_SECRET: secret0
       SYNC_SYNCSTORAGE__DATABASE_URL: mysql://test:test@sync-db:3306/syncstorage
       SYNC_TOKENSERVER__DATABASE_URL: mysql://test:test@tokenserver-db:3306/tokenserver
       SYNC_TOKENSERVER__RUN_MIGRATIONS: "true"
+      SYNC_TOKENSERVER__ENABLED: "true"
+      SYNC_TOKENSERVER__OAUTH_PROVIDER: "keycloak"
+      SYNC_TOKENSERVER__KEYCLOAK_SERVER_URL: "http://keycloak:7080"
+      SYNC_TOKENSERVER__KEYCLOAK_REALM: "sync"
+      SYNC_TOKENSERVER__KEYCLOAK_REQUEST_TIMEOUT: "10"
+      SYNC_TOKENSERVER__FXA_EMAIL_DOMAIN: "localhost"
+      SYNC_TOKENSERVER__FXA_METRICS_HASH_SECRET: "secret0"
       RUST_BACKTRACE: 1
 
   keycloak:

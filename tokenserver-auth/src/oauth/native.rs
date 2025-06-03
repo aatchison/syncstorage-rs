@@ -10,6 +10,9 @@ use syncserver_common::Metrics;
 use tokenserver_common::TokenserverError;
 use tokenserver_settings::Settings;
 
+#[cfg(not(feature = "py"))]
+use super::keycloak::KeycloakVerifier;
+
 const SYNC_SCOPE: &str = "https://identity.mozilla.com/apps/oldsync";
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -240,6 +243,47 @@ fn internal_err_with_ctx<E: std::fmt::Display>(err: E) -> TokenserverError {
     TokenserverError {
         context: err.to_string(),
         ..TokenserverError::internal_error()
+    }
+}
+
+/// Unified verifier that can handle both FxA and Keycloak OAuth tokens
+#[cfg(not(feature = "py"))]
+#[derive(Clone)]
+pub enum UnifiedVerifier<J> {
+    Fxa(Verifier<J>),
+    Keycloak(KeycloakVerifier<J>),
+}
+
+#[cfg(not(feature = "py"))]
+impl<J> UnifiedVerifier<J>
+where
+    J: JWTVerifier,
+{
+    pub fn new(settings: &Settings, jwk_verifiers: Vec<J>) -> Result<Self, TokenserverError> {
+        match settings.oauth_provider.as_str() {
+            "keycloak" => Ok(UnifiedVerifier::Keycloak(KeycloakVerifier::new(settings, jwk_verifiers)?)),
+            "fxa" | _ => Ok(UnifiedVerifier::Fxa(Verifier::new(settings, jwk_verifiers)?)),
+        }
+    }
+}
+
+#[cfg(not(feature = "py"))]
+#[async_trait]
+impl<J> VerifyToken for UnifiedVerifier<J>
+where
+    J: JWTVerifier,
+{
+    type Output = VerifyOutput;
+
+    async fn verify(
+        &self,
+        token: String,
+        metrics: &Metrics,
+    ) -> Result<VerifyOutput, TokenserverError> {
+        match self {
+            UnifiedVerifier::Fxa(verifier) => verifier.verify(token, metrics).await,
+            UnifiedVerifier::Keycloak(verifier) => verifier.verify(token, metrics).await,
+        }
     }
 }
 

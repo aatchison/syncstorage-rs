@@ -38,6 +38,14 @@ pub struct Settings {
     /// A secondary JWK to be used to verify OAuth tokens. This is intended to be used to enable
     /// seamless key rotations on FxA.
     pub fxa_oauth_secondary_jwk: Option<Jwk>,
+    /// OAuth provider type: "fxa" for Firefox Accounts or "keycloak" for Keycloak
+    pub oauth_provider: String,
+    /// The URL of the Keycloak server used for verifying OAuth tokens.
+    pub keycloak_server_url: String,
+    /// The Keycloak realm name.
+    pub keycloak_realm: String,
+    /// The timeout to be used when making requests to the Keycloak server.
+    pub keycloak_request_timeout: u64,
     /// The rate at which capacity should be released from nodes that are at capacity.
     pub node_capacity_release_rate: Option<f32>,
     /// The type of the storage nodes used by this instance of Tokenserver.
@@ -75,6 +83,10 @@ impl Default for Settings {
             fxa_oauth_request_timeout: 10,
             fxa_oauth_primary_jwk: None,
             fxa_oauth_secondary_jwk: None,
+            oauth_provider: "fxa".to_owned(),
+            keycloak_server_url: "http://localhost:7080".to_owned(),
+            keycloak_realm: "sync".to_owned(),
+            keycloak_request_timeout: 10,
             node_capacity_release_rate: None,
             node_type: NodeType::Spanner,
             statsd_label: "syncstorage.tokenserver".to_owned(),

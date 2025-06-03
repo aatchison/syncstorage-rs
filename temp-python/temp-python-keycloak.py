@@ -11,7 +11,7 @@ keycloak_server_url = "http://localhost:7080/realms/sync/protocol/openid-connect
 data = {
     'grant_type': 'password',
     'client_id': 'public-client',
-    'scope': 'email openid',
+    'scope': 'email openid https://identity.mozilla.com/apps/oldsync',
     'username': 'test@test.com',
     'password': '1234'
 }

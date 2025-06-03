@@ -99,8 +99,19 @@ def _set_local_test_env_vars():
     os.environ.setdefault("SYNC_CORS_MAX_AGE", "555")
     os.environ.setdefault("SYNC_CORS_ALLOWED_ORIGIN", "*")
     os.environ["MOZSVC_TEST_REMOTE"] = "localhost"
-    os.environ["SYNC_TOKENSERVER__FXA_OAUTH_SERVER_URL"] = \
-        os.environ["MOCK_FXA_SERVER_URL"]
+    
+    # Check if we should use Keycloak instead of FxA
+    if "KEYCLOAK_URL" in os.environ:
+        # Configure for Keycloak OIDC
+        os.environ["SYNC_TOKENSERVER__OAUTH_PROVIDER_TYPE"] = "oidc"
+        os.environ["SYNC_TOKENSERVER__OIDC_ISSUER_URL"] = \
+            f"{os.environ['KEYCLOAK_URL']}/realms/sync"
+        os.environ["SYNC_TOKENSERVER__FXA_OAUTH_SERVER_URL"] = \
+            f"{os.environ['KEYCLOAK_URL']}/realms/sync"
+    else:
+        # Use FxA mock server
+        os.environ["SYNC_TOKENSERVER__FXA_OAUTH_SERVER_URL"] = \
+            os.environ["MOCK_FXA_SERVER_URL"]
 
 # Fixtures
 

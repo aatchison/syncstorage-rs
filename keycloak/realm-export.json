@@ -798,7 +798,8 @@
         "profile",
         "roles",
         "basic",
-        "email"
+        "email",
+        "https://identity.mozilla.com/apps/oldsync"
       ],
       "optionalClientScopes": [
         "address",
@@ -929,6 +930,16 @@
       "attributes": {
         "consent.screen.text": "${offlineAccessScopeConsentText}",
         "display.on.consent.screen": "true"
+      }
+    },
+    {
+      "id": "sync-scope-id",
+      "name": "https://identity.mozilla.com/apps/oldsync",
+      "description": "Firefox Sync scope",
+      "protocol": "openid-connect",
+      "attributes": {
+        "include.in.token.scope": "true",
+        "display.on.consent.screen": "false"
       }
     },
     {

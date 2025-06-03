@@ -178,10 +178,10 @@ def validate_rust_compilation():
         result = subprocess.run(["cargo", "--version"], capture_output=True, text=True, check=True)
         print(f"✓ Cargo available: {result.stdout.strip()}")
         
-        # Try to compile the syncserver binary
+        # Try to compile the syncserver binary with mysql feature (avoiding Python dependencies)
         print("Checking compilation...")
         result = subprocess.run([
-            "cargo", "check", "--bin", "syncserver"
+            "cargo", "check", "--bin", "syncserver", "--no-default-features", "--features", "mysql"
         ], capture_output=True, text=True, check=True)
         
         print("✓ Rust code compiles successfully")

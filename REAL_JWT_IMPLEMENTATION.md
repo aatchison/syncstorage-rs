@@ -63,7 +63,7 @@ The implementation automatically detects the OAuth provider type:
 - **Grant Type**: `client_credentials`
 - **Client ID**: `confidential-client`
 - **Client Secret**: `YcdeiCc742lOk17poGhWT51GTAWMnQMr`
-- **Scope**: `openid`
+- **Scope**: `openid https://identity.mozilla.com/apps/oldsync`
 
 ## Benefits
 

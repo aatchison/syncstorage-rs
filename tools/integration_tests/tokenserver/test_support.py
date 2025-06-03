@@ -93,7 +93,7 @@ class TestCase:
             data = {
                 'grant_type': 'client_credentials',
                 'client_id': 'confidential-client',
-                'scope': 'openid',
+                'scope': f'openid {DEFAULT_OAUTH_SCOPE}',
                 'client_secret': confidential_client_secret
             }
             

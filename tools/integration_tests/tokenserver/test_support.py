@@ -69,8 +69,8 @@ class TestCase:
 
         self.database.close()
 
-    def _get_keycloak_token(self, username='test@test.com', password='1234'):
-        """Get a real JWT token from Keycloak for testing"""
+    def _get_keycloak_token(self):
+        """Get a real JWT token from Keycloak for testing using client credentials"""
         # Check if we're using OIDC/Keycloak
         oauth_provider_type = os.environ.get('SYNC_TOKENSERVER__OAUTH_PROVIDER_TYPE', 'fxa')
         if oauth_provider_type != 'oidc':
@@ -86,13 +86,15 @@ class TestCase:
         keycloak_base_url = keycloak_base_url.replace('keycloak:7080', 'localhost:7080')
         token_url = f"{keycloak_base_url}/protocol/openid-connect/token"
         
+        # Use confidential client credentials
+        confidential_client_secret = "YcdeiCc742lOk17poGhWT51GTAWMnQMr"
+        
         try:
             data = {
-                'grant_type': 'password',
-                'client_id': 'public-client',
-                'scope': f'email openid {DEFAULT_OAUTH_SCOPE}',
-                'username': username,
-                'password': password
+                'grant_type': 'client_credentials',
+                'client_id': 'confidential-client',
+                'scope': 'openid',
+                'client_secret': confidential_client_secret
             }
             
             response = requests.post(token_url, data=data, timeout=10)

@@ -19,13 +19,13 @@ This implementation replaces the test mode bypass approach with real JWT token g
 **File: `keycloak/realm-export.json`**
 - Added test user: `test@test.com` with password `1234`
 - User has proper realm roles and email verification
-- Enables password grant flow for token generation
+- Note: E2E tests use client credentials flow, not password grant
 
 ### 3. Enhanced Test Support for Real JWT Tokens
 
 **File: `tools/integration_tests/tokenserver/test_support.py`**
 - Added `_get_keycloak_token()` method to generate real JWT tokens
-- Uses Keycloak password grant flow with test credentials
+- Uses Keycloak client credentials grant flow with confidential client
 - Automatically detects OIDC configuration from environment variables
 - Falls back to fake tokens when Keycloak is not available or for FxA
 
@@ -42,7 +42,7 @@ This implementation replaces the test mode bypass approach with real JWT token g
 1. **OIDC Mode (Keycloak)**:
    - Detects `SYNC_TOKENSERVER__OAUTH_PROVIDER_TYPE=oidc`
    - Makes HTTP request to Keycloak token endpoint
-   - Uses password grant with `test@test.com/1234` credentials
+   - Uses client credentials grant with confidential client
    - Returns real JWT token with proper claims and signature
 
 2. **FxA Mode or Fallback**:
@@ -60,10 +60,10 @@ The implementation automatically detects the OAuth provider type:
 ### Keycloak Configuration
 
 - **Token Endpoint**: `{OIDC_ISSUER_URL}/protocol/openid-connect/token`
-- **Grant Type**: `password`
-- **Client ID**: `public-client`
-- **Scope**: `email openid https://identity.mozilla.com/apps/oldsync`
-- **Test Credentials**: `test@test.com` / `1234`
+- **Grant Type**: `client_credentials`
+- **Client ID**: `confidential-client`
+- **Client Secret**: `YcdeiCc742lOk17poGhWT51GTAWMnQMr`
+- **Scope**: `openid`
 
 ## Benefits
 

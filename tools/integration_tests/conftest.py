@@ -99,8 +99,14 @@ def _set_local_test_env_vars():
     os.environ.setdefault("SYNC_CORS_MAX_AGE", "555")
     os.environ.setdefault("SYNC_CORS_ALLOWED_ORIGIN", "*")
     os.environ["MOZSVC_TEST_REMOTE"] = "localhost"
-    os.environ["SYNC_TOKENSERVER__FXA_OAUTH_SERVER_URL"] = \
-        os.environ["MOCK_FXA_SERVER_URL"]
+    
+    # Only set FXA OAuth server URL if we're not using Keycloak
+    oauth_provider = os.environ.get("SYNC_TOKENSERVER__OAUTH_PROVIDER", "fxa")
+    if oauth_provider != "keycloak":
+        # For FXA OAuth, we need the mock FXA server URL
+        mock_fxa_url = os.environ.get("MOCK_FXA_SERVER_URL")
+        if mock_fxa_url:
+            os.environ["SYNC_TOKENSERVER__FXA_OAUTH_SERVER_URL"] = mock_fxa_url
 
 # Fixtures
 

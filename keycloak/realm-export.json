@@ -703,10 +703,12 @@
       "clientAuthenticatorType": "client-secret",
       "secret": "**********",
       "redirectUris": [
-        "/*"
+        "http://localhost:8000/*",
+        "https://localhost:8000/*"
       ],
       "webOrigins": [
-        "/*"
+        "http://localhost:8000",
+        "https://localhost:8000"
       ],
       "notBefore": 0,
       "bearerOnly": false,

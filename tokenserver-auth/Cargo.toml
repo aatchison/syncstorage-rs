@@ -39,3 +39,4 @@ tokio = { workspace = true, features = ["macros"] }
 [features]
 default = ["py"]
 py = ["pyo3"]
+keycloak = []

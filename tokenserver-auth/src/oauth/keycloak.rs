@@ -1,30 +1,30 @@
-#[cfg(not(feature = "py"))]
+#[cfg(feature = "keycloak")]
 use super::VerifyOutput;
-#[cfg(not(feature = "py"))]
+#[cfg(feature = "keycloak")]
 pub use crate::crypto::JWTVerifier;
-#[cfg(not(feature = "py"))]
+#[cfg(feature = "keycloak")]
 use crate::crypto::OAuthVerifyError;
-#[cfg(not(feature = "py"))]
+#[cfg(feature = "keycloak")]
 use crate::VerifyToken;
-#[cfg(not(feature = "py"))]
+#[cfg(feature = "keycloak")]
 use async_trait::async_trait;
-#[cfg(not(feature = "py"))]
+#[cfg(feature = "keycloak")]
 use reqwest::Url;
-#[cfg(not(feature = "py"))]
+#[cfg(feature = "keycloak")]
 use serde::{Deserialize, Serialize};
-#[cfg(not(feature = "py"))]
+#[cfg(feature = "keycloak")]
 use std::{borrow::Cow, time::Duration};
-#[cfg(not(feature = "py"))]
+#[cfg(feature = "keycloak")]
 use syncserver_common::Metrics;
-#[cfg(not(feature = "py"))]
+#[cfg(feature = "keycloak")]
 use tokenserver_common::TokenserverError;
-#[cfg(not(feature = "py"))]
+#[cfg(feature = "keycloak")]
 use tokenserver_settings::Settings;
 
-#[cfg(not(feature = "py"))]
+#[cfg(feature = "keycloak")]
 const SYNC_SCOPE: &str = "https://identity.mozilla.com/apps/oldsync";
 
-#[cfg(not(feature = "py"))]
+#[cfg(feature = "keycloak")]
 #[derive(Serialize, Deserialize, Debug)]
 struct TokenClaims {
     #[serde(rename = "sub")]
@@ -42,13 +42,13 @@ struct TokenClaims {
     resource_access: Option<serde_json::Value>,
 }
 
-#[cfg(not(feature = "py"))]
+#[cfg(feature = "keycloak")]
 #[derive(Serialize, Deserialize, Debug)]
 struct RealmAccess {
     roles: Vec<String>,
 }
 
-#[cfg(not(feature = "py"))]
+#[cfg(feature = "keycloak")]
 impl TokenClaims {
     fn validate(self) -> Result<VerifyOutput, TokenserverError> {
         // For Keycloak, we'll be more flexible with scope validation
@@ -65,7 +65,7 @@ impl TokenClaims {
     }
 }
 
-#[cfg(not(feature = "py"))]
+#[cfg(feature = "keycloak")]
 impl From<TokenClaims> for VerifyOutput {
     fn from(value: TokenClaims) -> Self {
         // For Keycloak, we'll use the subject as the user ID
@@ -78,7 +78,7 @@ impl From<TokenClaims> for VerifyOutput {
 }
 
 /// The Keycloak verifier used to verify OAuth tokens.
-#[cfg(not(feature = "py"))]
+#[cfg(feature = "keycloak")]
 #[derive(Clone)]
 pub struct KeycloakVerifier<J> {
     jwks_url: Url,
@@ -87,7 +87,7 @@ pub struct KeycloakVerifier<J> {
     realm: String,
 }
 
-#[cfg(not(feature = "py"))]
+#[cfg(feature = "keycloak")]
 impl<J> KeycloakVerifier<J>
 where
     J: JWTVerifier,
@@ -159,7 +159,7 @@ where
     }
 }
 
-#[cfg(not(feature = "py"))]
+#[cfg(feature = "keycloak")]
 #[async_trait]
 impl<J> VerifyToken for KeycloakVerifier<J>
 where
@@ -213,7 +213,7 @@ where
     }
 }
 
-#[cfg(not(feature = "py"))]
+#[cfg(feature = "keycloak")]
 fn unauthorized_err_with_ctx<E: std::fmt::Display>(err: E) -> TokenserverError {
     TokenserverError {
         context: err.to_string(),
@@ -221,7 +221,7 @@ fn unauthorized_err_with_ctx<E: std::fmt::Display>(err: E) -> TokenserverError {
     }
 }
 
-#[cfg(not(feature = "py"))]
+#[cfg(feature = "keycloak")]
 fn internal_err_with_ctx<E: std::fmt::Display>(err: E) -> TokenserverError {
     TokenserverError {
         context: err.to_string(),
@@ -229,7 +229,7 @@ fn internal_err_with_ctx<E: std::fmt::Display>(err: E) -> TokenserverError {
     }
 }
 
-#[cfg(all(test, not(feature = "py")))]
+#[cfg(all(test, feature = "keycloak"))]
 mod tests {
     use crate::crypto::{JWTVerifierImpl, OAuthVerifyError};
     use serde_json::json;

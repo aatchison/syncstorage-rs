@@ -15,6 +15,7 @@ use crate::VerifyToken;
 mod native;
 #[cfg(feature = "py")]
 mod py;
+#[cfg(feature = "keycloak")]
 mod keycloak;
 
 #[cfg(feature = "py")]
@@ -23,7 +24,7 @@ pub type Verifier = py::Verifier;
 #[cfg(not(feature = "py"))]
 pub type Verifier<J> = native::Verifier<J>;
 
-#[cfg(not(feature = "py"))]
+#[cfg(feature = "keycloak")]
 pub type KeycloakVerifier<J> = keycloak::KeycloakVerifier<J>;
 
 /// Unified OAuth verifier that can handle both FxA and Keycloak
@@ -31,6 +32,7 @@ pub type KeycloakVerifier<J> = keycloak::KeycloakVerifier<J>;
 #[derive(Clone)]
 pub enum UnifiedVerifier<J> {
     Fxa(native::Verifier<J>),
+    #[cfg(feature = "keycloak")]
     Keycloak(keycloak::KeycloakVerifier<J>),
 }
 
@@ -41,9 +43,12 @@ where
 {
     pub fn new(settings: &Settings, jwk_verifiers: Vec<J>) -> Result<Self, TokenserverError> {
         match settings.oauth_provider.as_str() {
+            #[cfg(feature = "keycloak")]
             "keycloak" => Ok(UnifiedVerifier::Keycloak(
                 keycloak::KeycloakVerifier::new(settings, jwk_verifiers)?
             )),
+            #[cfg(not(feature = "keycloak"))]
+            "keycloak" => Err(TokenserverError::internal_error()),
             "fxa" | _ => Ok(UnifiedVerifier::Fxa(
                 native::Verifier::new(settings, jwk_verifiers)?
             )),
@@ -66,6 +71,7 @@ where
     ) -> Result<VerifyOutput, TokenserverError> {
         match self {
             UnifiedVerifier::Fxa(verifier) => verifier.verify(token, metrics).await,
+            #[cfg(feature = "keycloak")]
             UnifiedVerifier::Keycloak(verifier) => verifier.verify(token, metrics).await,
         }
     }

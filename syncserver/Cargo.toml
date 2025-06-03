@@ -64,5 +64,6 @@ woothee = "0.13"
 default = ["mysql", "py_verifier"]
 no_auth = []
 py_verifier = ["tokenserver-auth/py"]
+keycloak = ["tokenserver-auth/keycloak"]
 mysql = ["syncstorage-db/mysql"]
 spanner = ["syncstorage-db/spanner"]

@@ -8,6 +8,7 @@ import os
 import math
 import time
 import urllib.parse as urlparse
+import requests
 
 from sqlalchemy import create_engine
 from tokenlib.utils import decode_token_bytes
@@ -68,32 +69,84 @@ class TestCase:
 
         self.database.close()
 
+    def _get_keycloak_token(self, username='test@test.com', password='1234'):
+        """Get a real JWT token from Keycloak for testing"""
+        # Check if we're using OIDC/Keycloak
+        oauth_provider_type = os.environ.get('SYNC_TOKENSERVER__OAUTH_PROVIDER_TYPE', 'fxa')
+        if oauth_provider_type != 'oidc':
+            return None
+            
+        # Get Keycloak server URL from environment
+        keycloak_base_url = os.environ.get('SYNC_TOKENSERVER__OIDC_ISSUER_URL', 
+                                         os.environ.get('SYNC_TOKENSERVER__FXA_OAUTH_SERVER_URL'))
+        if not keycloak_base_url:
+            return None
+            
+        # Replace internal docker hostname with localhost for tests
+        keycloak_base_url = keycloak_base_url.replace('keycloak:7080', 'localhost:7080')
+        token_url = f"{keycloak_base_url}/protocol/openid-connect/token"
+        
+        try:
+            data = {
+                'grant_type': 'password',
+                'client_id': 'public-client',
+                'scope': f'email openid {DEFAULT_OAUTH_SCOPE}',
+                'username': username,
+                'password': password
+            }
+            
+            response = requests.post(token_url, data=data, timeout=10)
+            if response.status_code == 200:
+                return response.json().get('access_token')
+            else:
+                print(f"Failed to get Keycloak token: {response.status_code} - {response.text}")
+                return None
+        except Exception as e:
+            print(f"Error getting Keycloak token: {e}")
+            return None
+
     def _build_oauth_headers(self, generation=None, user='test',
                              keys_changed_at=None, client_state=None,
                              status=200, **additional_headers):
-        claims = {
-            'user': user,
-            'generation': generation,
-            'client_id': 'fake client id',
-            'scope': [DEFAULT_OAUTH_SCOPE],
-        }
+        # Try to get a real JWT token from Keycloak first
+        real_token = self._get_keycloak_token()
+        
+        if real_token:
+            # Use real JWT token from Keycloak
+            headers = {}
+            headers['Authorization'] = f'Bearer {real_token}'
+            if client_state:
+                client_state = binascii.unhexlify(client_state)
+                client_state = b64encode(client_state).strip(b'=').decode('utf-8')
+                headers['X-KeyID'] = '%s-%s' % (keys_changed_at, client_state)
+            headers.update(additional_headers)
+            return headers
+        else:
+            # Fallback to fake token for FxA or when Keycloak is not available
+            claims = {
+                'user': user,
+                'generation': generation,
+                'client_id': 'fake client id',
+                'scope': [DEFAULT_OAUTH_SCOPE],
+            }
 
-        if generation is not None:
-            claims['generation'] = generation
+            if generation is not None:
+                claims['generation'] = generation
 
-        body = {
-            'body': claims,
-            'status': status
-        }
+            body = {
+                'body': claims,
+                'status': status
+            }
 
-        headers = {}
-        headers['Authorization'] = 'Bearer %s' % json.dumps(body)
-        client_state = binascii.unhexlify(client_state)
-        client_state = b64encode(client_state).strip(b'=').decode('utf-8')
-        headers['X-KeyID'] = '%s-%s' % (keys_changed_at, client_state)
-        headers.update(additional_headers)
+            headers = {}
+            headers['Authorization'] = 'Bearer %s' % json.dumps(body)
+            if client_state:
+                client_state = binascii.unhexlify(client_state)
+                client_state = b64encode(client_state).strip(b'=').decode('utf-8')
+                headers['X-KeyID'] = '%s-%s' % (keys_changed_at, client_state)
+            headers.update(additional_headers)
 
-        return headers
+            return headers
 
     def _add_node(self, capacity=100, available=100, node=NODE_URL, id=None,
                   current_load=0, backoff=0, downed=0):

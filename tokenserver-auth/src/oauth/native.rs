@@ -119,6 +119,8 @@ where
         })
     }
 
+
+
     async fn remote_verify_token(&self, token: &str) -> Result<TokenClaims, TokenserverError> {
         #[derive(Serialize)]
         struct VerifyRequest<'a> {
@@ -237,6 +239,8 @@ where
         token: String,
         metrics: &Metrics,
     ) -> Result<VerifyOutput, TokenserverError> {
+
+
         let mut verifiers = self
             .jwk_verifiers
             .iter()

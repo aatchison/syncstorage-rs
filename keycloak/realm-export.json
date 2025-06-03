@@ -477,6 +477,28 @@
       ],
       "notBefore": 0,
       "groups": []
+    },
+    {
+      "id": "test-user-id-12345",
+      "username": "test@test.com",
+      "email": "test@test.com",
+      "emailVerified": true,
+      "enabled": true,
+      "totp": false,
+      "credentials": [
+        {
+          "type": "password",
+          "value": "1234",
+          "temporary": false
+        }
+      ],
+      "disableableCredentialTypes": [],
+      "requiredActions": [],
+      "realmRoles": [
+        "default-roles-sync"
+      ],
+      "notBefore": 0,
+      "groups": []
     }
   ],
   "scopeMappings": [

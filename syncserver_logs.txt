@@ -1,0 +1,23 @@
+{"Logger":"syncserver-0.18.3","Type":"syncserver:log","Hostname":"8304982bf9c7","Pid":1,"Severity":6,"Timestamp":1749016381443013030,"Fields":{"msg":"starting 16 workers"}}
+{"Logger":"syncserver-0.18.3","Type":"syncserver:log","Hostname":"8304982bf9c7","Pid":1,"Severity":6,"Timestamp":1749016381443043509,"Fields":{"msg":"Server running on http://0.0.0.0:8000 (mysql) (available_parallelism: Ok(16) num_cpus: 16 num_cpus (phys): 16) No quota"}}
+{"Logger":"syncserver-0.18.3","Type":"syncserver:log","Hostname":"8304982bf9c7","Pid":1,"Severity":6,"Timestamp":1749016381443052646,"Fields":{"msg":"Actix runtime found; starting in Actix runtime"}}
+{"Logger":"syncserver-0.18.3","Type":"syncserver:log","Hostname":"8304982bf9c7","Pid":1,"Severity":6,"Timestamp":1749016381443105956,"Fields":{"msg":"starting service: \"actix-web-service-0.0.0.0:8000\", workers: 16, listening on: 0.0.0.0:8000"}}
+{"Logger":"syncserver-0.18.3","Type":"syncserver:log","Hostname":"8304982bf9c7","Pid":1,"Severity":6,"Timestamp":1749017216470909509,"Fields":{"msg":"SIGTERM received; starting graceful shutdown"}}
+{"Logger":"syncserver-0.18.3","Type":"syncserver:log","Hostname":"8304982bf9c7","Pid":1,"Severity":6,"Timestamp":1749017216470929286,"Fields":{"msg":"shutting down idle worker"}}
+{"Logger":"syncserver-0.18.3","Type":"syncserver:log","Hostname":"8304982bf9c7","Pid":1,"Severity":6,"Timestamp":1749017216470933924,"Fields":{"msg":"shutting down idle worker"}}
+{"Logger":"syncserver-0.18.3","Type":"syncserver:log","Hostname":"8304982bf9c7","Pid":1,"Severity":6,"Timestamp":1749017216470948412,"Fields":{"msg":"accept thread stopped"}}
+{"Logger":"syncserver-0.18.3","Type":"syncserver:log","Hostname":"8304982bf9c7","Pid":1,"Severity":6,"Timestamp":1749017216470966736,"Fields":{"msg":"shutting down idle worker"}}
+{"Logger":"syncserver-0.18.3","Type":"syncserver:log","Hostname":"8304982bf9c7","Pid":1,"Severity":6,"Timestamp":1749017216470969962,"Fields":{"msg":"shutting down idle worker"}}
+{"Logger":"syncserver-0.18.3","Type":"syncserver:log","Hostname":"8304982bf9c7","Pid":1,"Severity":6,"Timestamp":1749017216470972497,"Fields":{"msg":"shutting down idle worker"}}
+{"Logger":"syncserver-0.18.3","Type":"syncserver:log","Hostname":"8304982bf9c7","Pid":1,"Severity":6,"Timestamp":1749017216470974711,"Fields":{"msg":"shutting down idle worker"}}
+{"Logger":"syncserver-0.18.3","Type":"syncserver:log","Hostname":"8304982bf9c7","Pid":1,"Severity":6,"Timestamp":1749017216470977566,"Fields":{"msg":"shutting down idle worker"}}
+{"Logger":"syncserver-0.18.3","Type":"syncserver:log","Hostname":"8304982bf9c7","Pid":1,"Severity":6,"Timestamp":1749017216470983678,"Fields":{"msg":"shutting down idle worker"}}
+{"Logger":"syncserver-0.18.3","Type":"syncserver:log","Hostname":"8304982bf9c7","Pid":1,"Severity":6,"Timestamp":1749017216470986353,"Fields":{"msg":"shutting down idle worker"}}
+{"Logger":"syncserver-0.18.3","Type":"syncserver:log","Hostname":"8304982bf9c7","Pid":1,"Severity":6,"Timestamp":1749017216470989308,"Fields":{"msg":"shutting down idle worker"}}
+{"Logger":"syncserver-0.18.3","Type":"syncserver:log","Hostname":"8304982bf9c7","Pid":1,"Severity":6,"Timestamp":1749017216471002103,"Fields":{"msg":"shutting down idle worker"}}
+{"Logger":"syncserver-0.18.3","Type":"syncserver:log","Hostname":"8304982bf9c7","Pid":1,"Severity":6,"Timestamp":1749017216471006452,"Fields":{"msg":"shutting down idle worker"}}
+{"Logger":"syncserver-0.18.3","Type":"syncserver:log","Hostname":"8304982bf9c7","Pid":1,"Severity":6,"Timestamp":1749017216471191799,"Fields":{"msg":"shutting down idle worker"}}
+{"Logger":"syncserver-0.18.3","Type":"syncserver:log","Hostname":"8304982bf9c7","Pid":1,"Severity":6,"Timestamp":1749017216471200205,"Fields":{"msg":"shutting down idle worker"}}
+{"Logger":"syncserver-0.18.3","Type":"syncserver:log","Hostname":"8304982bf9c7","Pid":1,"Severity":6,"Timestamp":1749017216471204443,"Fields":{"msg":"shutting down idle worker"}}
+{"Logger":"syncserver-0.18.3","Type":"syncserver:log","Hostname":"8304982bf9c7","Pid":1,"Severity":6,"Timestamp":1749017216471248486,"Fields":{"msg":"shutting down idle worker"}}
+{"Logger":"syncserver-0.18.3","Type":"syncserver:log","Hostname":"8304982bf9c7","Pid":1,"Severity":6,"Timestamp":1749017216772993872,"Fields":{"msg":"Server closing"}}

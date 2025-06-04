@@ -114,7 +114,7 @@ services:
       SYNC_TOKENSERVER__OIDC_ISSUER_URL: "http://keycloak:7080/realms/sync"
       SYNC_TOKENSERVER__FXA_OAUTH_SERVER_URL: "http://keycloak:7080/realms/sync"
 
-      TOKENSERVER_HOST: http://localhost:8000
+      TOKENSERVER_HOST: http://syncserver:8000
     entrypoint: >
       /bin/sh -c "
         exit_code=0;

@@ -103,16 +103,10 @@ class TestCase:
                 'client_secret': confidential_client_secret
             }
             
-            print(f"DEBUG: Attempting to get token from: {token_url}")
-            print(f"DEBUG: Request data: {data}")
-            
             response = requests.post(token_url, data=data, timeout=10)
-            print(f"DEBUG: Response status: {response.status_code}")
-            print(f"DEBUG: Response text: {response.text[:500]}")
             
             if response.status_code == 200:
                 token = response.json().get('access_token')
-                print(f"DEBUG: Successfully got token: {token[:50] if token else 'None'}...")
                 return token
             else:
                 print(f"Failed to get Keycloak token: {response.status_code} - {response.text}")
@@ -224,9 +218,22 @@ class TestCase:
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s);
         '''
         created_at = created_at or math.trunc(time.time() * 1000)
+        
+        # Use the correct email format based on OAuth provider
+        if email is None:
+            oauth_provider_type = os.environ.get('SYNC_TOKENSERVER__OAUTH_PROVIDER_TYPE', 'fxa')
+            if oauth_provider_type == 'oidc':
+                # When using Keycloak OIDC, the JWT subject is a UUID and email is constructed as {uuid}@{domain}
+                # The service account UUID is fixed in our Keycloak configuration
+                keycloak_service_account_uuid = '468ee2d8-047a-497a-9247-f8e7056608a6'
+                email = f'{keycloak_service_account_uuid}@localhost'
+            else:
+                # Default FxA format
+                email = 'test@%s' % self.FXA_EMAIL_DOMAIN
+        
         cursor = self._execute_sql(query,
                                    (self.service_id,
-                                    email or 'test@%s' % self.FXA_EMAIL_DOMAIN,
+                                    email,
                                     generation, client_state,
                                     created_at, nodeid, keys_changed_at,
                                     replaced_at))

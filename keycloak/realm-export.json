@@ -763,7 +763,8 @@
         "profile",
         "roles",
         "basic",
-        "email"
+        "email",
+        "https://identity.mozilla.com/apps/oldsync"
       ],
       "optionalClientScopes": [
         "address",

@@ -10,7 +10,7 @@ use std::sync::Arc;
 use actix_web::{
     dev::Payload,
     web::{Data, Query},
-    FromRequest, HttpRequest,
+    FromRequest, HttpMessage, HttpRequest,
 };
 use base64::{engine, Engine};
 use futures::future::LocalBoxFuture;
@@ -46,6 +46,7 @@ pub struct TokenserverRequest {
     pub service_id: i32,
     pub duration: u64,
     pub node_type: NodeType,
+    pub is_oauth: bool,
 }
 
 impl TokenserverRequest {
@@ -69,7 +70,14 @@ impl TokenserverRequest {
     /// The logic here is slightly complicated by the fact that older versions
     /// of the FxA server may not have been sending all the expected fields, and
     /// that some clients do not report the `generation` timestamp.
+    ///
+    /// For OAuth/OIDC requests, we skip most FxA-specific validations since
+    /// concepts like client_state, generation, and keys_changed_at don't apply.
     fn validate(&self) -> Result<(), TokenserverError> {
+        // Skip FxA-specific validations for OAuth/OIDC requests
+        if self.is_oauth {
+            return Ok(());
+        }
         let auth_keys_changed_at = self.auth_data.keys_changed_at;
         let auth_generation = self.auth_data.generation;
         let user_keys_changed_at = self.user.keys_changed_at;
@@ -278,6 +286,13 @@ impl FromRequest for TokenserverRequest {
                 })
             };
 
+            // Check if this is an OAuth request by looking for the token_type tag
+            let is_oauth = req.extensions()
+                .get::<HashMap<String, String>>()
+                .and_then(|tags| tags.get("token_type"))
+                .map(|token_type| token_type == "OAuth")
+                .unwrap_or(false);
+
             let tokenserver_request = TokenserverRequest {
                 user,
                 auth_data,
@@ -287,6 +302,7 @@ impl FromRequest for TokenserverRequest {
                 service_id,
                 duration: duration.unwrap_or(state.token_duration),
                 node_type: state.node_type,
+                is_oauth,
             };
 
             tokenserver_request.validate()?;

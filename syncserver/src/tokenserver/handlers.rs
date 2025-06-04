@@ -77,7 +77,16 @@ fn get_token_plaintext(
     req: &TokenserverRequest,
     updates: &UserUpdates,
 ) -> Result<MakeTokenPlaintext, TokenserverError> {
-    let fxa_kid = {
+    let fxa_kid = if req.is_oauth {
+        // For OAuth/OIDC requests, create a simplified kid format
+        // Use the user's UID and a timestamp instead of FxA-specific client state
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        format!("{:013}-oauth-{:}", timestamp, updates.uid)
+    } else {
+        // Original FxA logic
         // If decoding the hex bytes fails, it means we did something wrong when we stored the
         // client state in the database
         let client_state =
@@ -143,6 +152,14 @@ async fn update_user(
     req: &TokenserverRequest,
     db: Box<dyn Db>,
 ) -> Result<UserUpdates, TokenserverError> {
+    // For OAuth/OIDC requests, use simplified logic without FxA-specific validations
+    if req.is_oauth {
+        return Ok(UserUpdates {
+            keys_changed_at: req.user.keys_changed_at,
+            generation: req.user.generation,
+            uid: req.user.uid,
+        });
+    }
     let keys_changed_at = match (req.auth_data.keys_changed_at, req.user.keys_changed_at) {
         // If the keys_changed_at in the request is larger than that stored on the user record,
         // update to the value in the request.

@@ -115,11 +115,17 @@ class TestCase:
             print(f"Error getting Keycloak token: {e}")
             return None
 
+    def _is_using_keycloak(self):
+        """Check if we're using Keycloak for OAuth instead of FxA"""
+        return self._get_keycloak_token() is not None
+
     def _build_oauth_headers(self, generation=None, user='test',
                              keys_changed_at=None, client_state=None,
                              status=200, **additional_headers):
         # Try to get a real JWT token from Keycloak first
         real_token = self._get_keycloak_token()
+        
+        print(f"DEBUG: _build_oauth_headers called with generation={generation}, using real_token={real_token is not None}")
         
         if real_token:
             # Use real JWT token from Keycloak
@@ -130,9 +136,10 @@ class TestCase:
                 client_state = b64encode(client_state).strip(b'=').decode('utf-8')
                 headers['X-KeyID'] = '%s-%s' % (keys_changed_at, client_state)
             headers.update(additional_headers)
+            print(f"DEBUG: Using Keycloak token, headers: {headers}")
             return headers
         else:
-            # Fallback to fake token for FxA or when Keycloak is not available
+            # Fallback to fake token for FxA or when Keycloak is not available or when generation is needed
             claims = {
                 'user': user,
                 'generation': generation,
@@ -156,6 +163,7 @@ class TestCase:
                 headers['X-KeyID'] = '%s-%s' % (keys_changed_at, client_state)
             headers.update(additional_headers)
 
+            print(f"DEBUG: Using fake token, body: {body}, headers: {headers}")
             return headers
 
     def _add_node(self, capacity=100, available=100, node=NODE_URL, id=None,

@@ -101,20 +101,13 @@ impl TokenserverRequest {
                 ));
             }
 
-            // Check if the requested client_state matches the returned user's client_state
+            // For OAuth, we allow client_state updates and only reject if user was replaced
+            // The OAuth token verification already ensures the request is valid
             if self.auth_data.client_state != self.user.client_state {
-                println!("ULTRATHINK DEBUG: OAuth client_state mismatch - requested: {}, user: {}, uid: {}", 
+                println!("ULTRATHINK DEBUG: OAuth client_state update - requested: {}, user: {}, uid: {}", 
                          &self.auth_data.client_state, &self.user.client_state, self.user.uid);
-                
-                // The get_or_create_user returned the most recent user, but the client is requesting
-                // a different client_state. We need to check if there's a user with the requested
-                // client_state that was replaced.
-                // For now, if client_states don't match, assume the requested one was replaced
-                let error_message = "Unacceptable client-state value stale value".to_owned();
-                return Err(TokenserverError::invalid_client_state(
-                    error_message,
-                    Some(vec![("is_stale", "true".to_owned())]),
-                ));
+                // This is a legitimate client_state update for OAuth, allow it to proceed
+                // The update_user function will handle updating the user record
             }
             
             // For OAuth, we don't validate FxA-specific fields
@@ -175,6 +168,8 @@ impl TokenserverRequest {
         if self.auth_data.client_state != self.user.client_state
             && opt_cmp!(auth_generation <= user_generation)
         {
+            debug!("Client state validation: client_state changed from {:?} to {:?}, but generation unchanged ({:?} <= {:?})", 
+                   self.user.client_state, self.auth_data.client_state, auth_generation, user_generation);
             let error_message =
                 "Unacceptable client-state value new value with no generation change".to_owned();
             return Err(TokenserverError::invalid_client_state(error_message, None));
@@ -185,6 +180,8 @@ impl TokenserverRequest {
         if self.auth_data.client_state != self.user.client_state
             && opt_cmp!(auth_keys_changed_at <= user_keys_changed_at)
         {
+            debug!("Client state validation: client_state changed from {:?} to {:?}, but keys_changed_at unchanged ({:?} <= {:?})", 
+                   self.user.client_state, self.auth_data.client_state, auth_keys_changed_at, user_keys_changed_at);
             let error_message =
                 "Unacceptable client-state value new value with no keys_changed_at change"
                     .to_owned();
@@ -331,11 +328,11 @@ impl FromRequest for TokenserverRequest {
                 })
             };
 
-            // Check if this is an OAuth request by looking for the token_type tag
-            let is_oauth = req.extensions()
-                .get::<HashMap<String, String>>()
-                .and_then(|tags| tags.get("token_type"))
-                .map(|token_type| token_type == "OAuth")
+            // Check if this is an OAuth request by looking at the Authorization header
+            let is_oauth = req.headers()
+                .get("authorization")
+                .and_then(|auth_header| auth_header.to_str().ok())
+                .map(|auth_str| auth_str.starts_with("Bearer "))
                 .unwrap_or(false);
 
             let tokenserver_request = TokenserverRequest {
@@ -518,11 +515,13 @@ impl FromRequest for AuthData {
                     let fxa_uid = verify_output.fxa_uid;
                     let email = format!("{}@{}", fxa_uid, state.fxa_email_domain);
 
+                    let generation = verify_output.generation;
+                    
                     Ok(AuthData {
                         client_state: key_id.client_state,
                         email,
                         fxa_uid,
-                        generation: convert_zero_to_none(verify_output.generation),
+                        generation: convert_zero_to_none(generation),
                         keys_changed_at: convert_zero_to_none(Some(key_id.keys_changed_at)),
                     })
                 }

@@ -152,11 +152,11 @@ async fn update_user(
     req: &TokenserverRequest,
     db: Box<dyn Db>,
 ) -> Result<UserUpdates, TokenserverError> {
-    // For OAuth/OIDC requests, use simplified logic without FxA-specific validations
+    // For OAuth/OIDC requests, use the values from the OAuth token and X-KeyID header
     if req.is_oauth {
         return Ok(UserUpdates {
-            keys_changed_at: req.user.keys_changed_at,
-            generation: req.user.generation,
+            keys_changed_at: req.auth_data.keys_changed_at,
+            generation: req.auth_data.generation.unwrap_or(req.user.generation),
             uid: req.user.uid,
         });
     }

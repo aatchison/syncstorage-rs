@@ -135,8 +135,49 @@ impl TokenserverRequest {
                          &self.auth_data.client_state, &self.user.client_state, self.auth_data.keys_changed_at, self.user.keys_changed_at);
             }
             
-            // For OAuth, we don't validate FxA-specific fields
-            // The JWT token itself provides authentication and authorization
+            // For OAuth, we still need to validate generation and keys_changed_at constraints
+            // even though we skip FxA-specific validation
+            
+            let auth_keys_changed_at = self.auth_data.keys_changed_at;
+            // For OAuth, use keys_changed_at as generation if generation is None (same as in handlers.rs)
+            let auth_generation = self.auth_data.generation.or(self.auth_data.keys_changed_at);
+            let user_keys_changed_at = self.user.keys_changed_at;
+            let user_generation = Some(self.user.generation);
+            
+            println!("ULTRATHINK DEBUG: OAuth validation values - auth_generation: {:?}, user_generation: {:?}, auth_keys_changed_at: {:?}, user_keys_changed_at: {:?}", 
+                     auth_generation, user_generation, auth_keys_changed_at, user_keys_changed_at);
+
+            /// `$left` and `$right` must both be `Option`s, and `$op` must be a binary infix
+            /// operator. If `$left` and `$right` are both `Some`, this macro returns
+            /// `$left $op $right`; otherwise, it returns `false`.
+            macro_rules! opt_cmp {
+                ($left:ident $op:tt $right:ident) => {
+                    $left.zip($right).map(|(l, r)| l $op r).unwrap_or(false)
+                }
+            }
+
+            // The generation on the request cannot be earlier than the generation stored on the user
+            // record. This catches retired users (generation=MAX_GENERATION).
+            if opt_cmp!(user_generation > auth_generation) {
+                println!("ULTRATHINK DEBUG: OAuth generation validation failed - user_generation: {:?}, auth_generation: {:?}", 
+                         user_generation, auth_generation);
+                return Err(TokenserverError {
+                    context: "New generation less than previously-seen generation".to_owned(),
+                    ..TokenserverError::invalid_generation()
+                });
+            }
+
+            // The keys_changed_at on the request cannot be earlier than the keys_changed_at stored on
+            // the user record.
+            if opt_cmp!(user_keys_changed_at > auth_keys_changed_at) {
+                println!("ULTRATHINK DEBUG: OAuth keys_changed_at validation failed - user_keys_changed_at: {:?}, auth_keys_changed_at: {:?}", 
+                         user_keys_changed_at, auth_keys_changed_at);
+                return Err(TokenserverError {
+                    context: "New keys_changed_at less than previously-seen keys_changed_at".to_owned(),
+                    ..TokenserverError::invalid_keys_changed_at()
+                });
+            }
+            
             return Ok(());
         }
         let auth_keys_changed_at = self.auth_data.keys_changed_at;

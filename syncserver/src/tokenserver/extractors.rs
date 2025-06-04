@@ -74,8 +74,13 @@ impl TokenserverRequest {
     /// For OAuth/OIDC requests, we implement OAuth-appropriate validations
     /// instead of FxA-specific ones.
     fn validate(&self) -> Result<(), TokenserverError> {
+        println!("ULTRATHINK DEBUG: validate() called - is_oauth: {}, client_state: {}, user_client_state: {}, uid: {}, replaced_at: {:?}",
+                 self.is_oauth, &self.auth_data.client_state, &self.user.client_state, self.user.uid, self.user.replaced_at);
+        
         // For OAuth/OIDC requests, implement OAuth-appropriate behavior
         if self.is_oauth {
+            println!("ULTRATHINK DEBUG: OAuth validation started - client_state: {}, user_client_state: {}, uid: {}", 
+                     &self.auth_data.client_state, &self.user.client_state, self.user.uid);
             // OAuth doesn't use client_state, generation, or keys_changed_at
             // These are FxA-specific concepts that don't apply to OAuth/OIDC
             
@@ -98,10 +103,8 @@ impl TokenserverRequest {
 
             // Check if the requested client_state matches the returned user's client_state
             if self.auth_data.client_state != self.user.client_state {
-                warn!("OAuth client_state mismatch - checking if requested client_state was replaced"; 
-                      "requested_client_state" => &self.auth_data.client_state, 
-                      "user_client_state" => &self.user.client_state,
-                      "uid" => self.user.uid);
+                println!("ULTRATHINK DEBUG: OAuth client_state mismatch - requested: {}, user: {}, uid: {}", 
+                         &self.auth_data.client_state, &self.user.client_state, self.user.uid);
                 
                 // The get_or_create_user returned the most recent user, but the client is requesting
                 // a different client_state. We need to check if there's a user with the requested

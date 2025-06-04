@@ -764,6 +764,7 @@
         "roles",
         "basic",
         "email",
+        "openid",
         "https://identity.mozilla.com/apps/oldsync"
       ],
       "optionalClientScopes": [
@@ -953,6 +954,16 @@
       "attributes": {
         "consent.screen.text": "${offlineAccessScopeConsentText}",
         "display.on.consent.screen": "true"
+      }
+    },
+    {
+      "id": "openid-scope-id",
+      "name": "openid",
+      "description": "OpenID Connect built-in scope: openid",
+      "protocol": "openid-connect",
+      "attributes": {
+        "include.in.token.scope": "true",
+        "display.on.consent.screen": "false"
       }
     },
     {

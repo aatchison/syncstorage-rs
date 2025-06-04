@@ -69,8 +69,8 @@ class TestMisc(TestCase, unittest.TestCase):
         uid = self._add_user(generation=1236, created_at=1233)
         # Users are sorted by (generation, created_at), so the fourth user
         # record is considered to be the current user
-        headers = self._build_auth_headers(generation=1236,
-                                           keys_changed_at=1234,
+        headers = self._build_auth_headers(generation=10000,
+                                           keys_changed_at=10000,
                                            client_state='aaaa')
         res = self.app.get('/1.0/sync/1.5', headers=headers)
         self.assertEqual(res.json['uid'], uid)
@@ -115,8 +115,8 @@ class TestMisc(TestCase, unittest.TestCase):
                              client_state='aaaa')
         # Send a request, updating the generation, keys_changed_at, and
         # client_state
-        headers = self._build_auth_headers(generation=1235,
-                                           keys_changed_at=1235,
+        headers = self._build_auth_headers(generation=10002,
+                                           keys_changed_at=10002,
                                            client_state='bbbb')
         res = self.app.get('/1.0/sync/1.5', headers=headers)
         # A new user should have been created
@@ -125,8 +125,8 @@ class TestMisc(TestCase, unittest.TestCase):
         # The new user record should have the updated generation,
         # keys_changed_at, and client_state
         user = self._get_user(res.json['uid'])
-        self.assertEqual(user['generation'], 1235)
-        self.assertEqual(user['keys_changed_at'], 1235)
+        self.assertEqual(user['generation'], 10002)
+        self.assertEqual(user['keys_changed_at'], 10002)
         self.assertEqual(user['client_state'], 'bbbb')
         # The old user record should not have the updated values
         user = self._get_user(uid)
@@ -166,8 +166,8 @@ class TestMisc(TestCase, unittest.TestCase):
     def test_retired_users_can_make_requests(self):
         # Add a retired user to the database
         self._add_user(generation=MAX_GENERATION)
-        headers = self._build_auth_headers(generation=1235,
-                                           keys_changed_at=1234,
+        headers = self._build_auth_headers(generation=10001,
+                                           keys_changed_at=10001,
                                            client_state='aaaa')
         # Retired users cannot make requests with a generation smaller than
         # the max generation
@@ -186,7 +186,7 @@ class TestMisc(TestCase, unittest.TestCase):
         # Retired users can make requests with a generation number equal to
         # the max generation
         headers = self._build_auth_headers(generation=MAX_GENERATION,
-                                           keys_changed_at=1234,
+                                           keys_changed_at=MAX_GENERATION,
                                            client_state='aaaa')
         self.app.get('/1.0/sync/1.5', headers=headers)
 

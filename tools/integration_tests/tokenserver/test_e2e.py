@@ -179,7 +179,7 @@ class TestE2e(TestCase, unittest.TestCase):
         oauth_token = self.oauth_token
         headers = {
             'Authorization': 'Bearer %s' % oauth_token,
-            'X-KeyID': '1234-qqo'
+            'X-KeyID': '9999-qqo'
         }
         # Send a valid request, allocating a new user
         res = self.app.get('/1.0/sync/1.5', headers=headers)

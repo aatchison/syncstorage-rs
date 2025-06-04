@@ -74,11 +74,8 @@ impl TokenserverRequest {
     /// For OAuth/OIDC requests, we implement OAuth-appropriate validations
     /// instead of FxA-specific ones.
     fn validate(&self) -> Result<(), TokenserverError> {
-                 self.is_oauth, &self.auth_data.client_state, &self.user.client_state, self.user.uid, self.user.replaced_at);
-        
         // For OAuth/OIDC requests, implement OAuth-appropriate behavior
         if self.is_oauth {
-                     &self.auth_data.client_state, &self.user.client_state, self.user.uid);
             // OAuth doesn't use client_state, generation, or keys_changed_at
             // These are FxA-specific concepts that don't apply to OAuth/OIDC
             
@@ -101,11 +98,8 @@ impl TokenserverRequest {
 
             // For OAuth, check if the requested client_state belongs to a replaced user
             if self.auth_data.client_state != self.user.client_state {
-                         &self.auth_data.client_state, &self.user.client_state, self.user.uid);
-                
                 // Check if the requested client_state is in the old_client_states (replaced users)
                 if self.user.old_client_states.contains(&self.auth_data.client_state) {
-                             &self.auth_data.client_state, &self.user.old_client_states);
                     let error_message = "Unacceptable client-state value stale value".to_owned();
                     return Err(TokenserverError::invalid_client_state(
                         error_message,
@@ -117,7 +111,6 @@ impl TokenserverRequest {
                 if self.auth_data.keys_changed_at.is_some() && 
                    self.user.keys_changed_at.is_some() &&
                    self.auth_data.keys_changed_at <= self.user.keys_changed_at {
-                             self.auth_data.keys_changed_at, self.user.keys_changed_at);
                     let error_message = "Unacceptable client-state value new value with no keys_changed_at change".to_owned();
                     return Err(TokenserverError::invalid_client_state(
                         error_message,
@@ -126,7 +119,6 @@ impl TokenserverRequest {
                 }
                 
                 // This is a legitimate client_state update for OAuth, allow it to proceed
-                         &self.auth_data.client_state, &self.user.client_state, self.auth_data.keys_changed_at, self.user.keys_changed_at);
             }
             
             // For OAuth, we still need to validate generation and keys_changed_at constraints
@@ -137,8 +129,6 @@ impl TokenserverRequest {
             let auth_generation = self.auth_data.generation.or(self.auth_data.keys_changed_at);
             let user_keys_changed_at = self.user.keys_changed_at;
             let user_generation = Some(self.user.generation);
-            
-                     auth_generation, user_generation, auth_keys_changed_at, user_keys_changed_at);
 
             /// `$left` and `$right` must both be `Option`s, and `$op` must be a binary infix
             /// operator. If `$left` and `$right` are both `Some`, this macro returns
@@ -152,7 +142,6 @@ impl TokenserverRequest {
             // The generation on the request cannot be earlier than the generation stored on the user
             // record. This catches retired users (generation=MAX_GENERATION).
             if opt_cmp!(user_generation > auth_generation) {
-                         user_generation, auth_generation);
                 return Err(TokenserverError {
                     context: "New generation less than previously-seen generation".to_owned(),
                     ..TokenserverError::invalid_generation()
@@ -162,7 +151,6 @@ impl TokenserverRequest {
             // The keys_changed_at on the request cannot be earlier than the keys_changed_at stored on
             // the user record.
             if opt_cmp!(user_keys_changed_at > auth_keys_changed_at) {
-                         user_keys_changed_at, auth_keys_changed_at);
                 return Err(TokenserverError {
                     context: "New keys_changed_at less than previously-seen keys_changed_at".to_owned(),
                     ..TokenserverError::invalid_keys_changed_at()

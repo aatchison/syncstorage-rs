@@ -22,7 +22,7 @@ diesel_logger = { workspace = true }
 diesel_migrations = { workspace = true, features = ["mysql"] }
 syncserver-common = { path = "../syncserver-common" }
 syncserver-db-common = { path = "../syncserver-db-common" }
-tokenserver-common = { path = "../tokenserver-common" }
+tokenserver-common = { path = "../tokenserver-common", default-features = false }
 tokenserver-settings = { path = "../tokenserver-settings" }
 tokio = { workspace = true, features = ["macros", "sync"] }
 

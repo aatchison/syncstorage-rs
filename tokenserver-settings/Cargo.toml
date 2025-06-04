@@ -9,4 +9,4 @@ edition.workspace=true
 serde.workspace=true
 jsonwebtoken.workspace=true
 
-tokenserver-common = { path = "../tokenserver-common" }
+tokenserver-common = { path = "../tokenserver-common", default-features = false }

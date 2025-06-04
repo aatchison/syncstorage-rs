@@ -58,7 +58,7 @@ services:
     # that Syncstorage and Tokenserver are now part of one repository/server called
     # "Syncserver" (updated from "syncstorage-rs"). We keep the legacy naming below for
     # backwards compatibility with previous Docker images.
-    image: ${SYNCSTORAGE_RS_IMAGE:-syncstorage-rs:latest}
+    image: app:minimal
     restart: always
     ports:
       - "8000:8000"
@@ -77,30 +77,32 @@ services:
       SYNC_TOKENSERVER__RUN_MIGRATIONS: "true"
       SYNC_TOKENSERVER__ENABLED: "true"
       SYNC_TOKENSERVER__OAUTH_PROVIDER_TYPE: "oidc"
+      SYNC_TOKENSERVER__OAUTH_PROVIDER: "keycloak"
       SYNC_TOKENSERVER__OIDC_ISSUER_URL: "http://keycloak:7080/realms/sync"
       SYNC_TOKENSERVER__FXA_OAUTH_SERVER_URL: "http://keycloak:7080/realms/sync"
       SYNC_TOKENSERVER__FXA_EMAIL_DOMAIN: "localhost"
       SYNC_TOKENSERVER__FXA_METRICS_HASH_SECRET: "secret0"
       RUST_BACKTRACE: 1
+      RUST_LOG: debug
 
   keycloak:
     image: quay.io/keycloak/keycloak:latest
     environment:
-      KC_HOSTNAME: localhost
+      KC_HOSTNAME: keycloak
       KC_HOSTNAME_PORT: 7080
-      KC_HOSTNAME_STRICT_BACKCHANNEL: "true"
+      KC_HOSTNAME_STRICT_BACKCHANNEL: "false"
       KEYCLOAK_ADMIN: admin
       KEYCLOAK_ADMIN_PASSWORD: admin
       KC_HEALTH_ENABLED: "true"
       KC_LOG_LEVEL: info
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:7080/health/ready"]
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/localhost/9000 && echo -e 'GET /health/ready HTTP/1.1\\r\\nHost: localhost\\r\\nConnection: close\\r\\n\\r\\n' >&3 && cat <&3 | grep -q '200 OK'"]
       interval: 15s
       timeout: 2s
       retries: 15
     command: ["start-dev", "--http-port", "7080", "--https-port", "7443", "--import-realm"]
     volumes: # Ignore if you don't have realm-export.json to migrate data
-      - ./keycloak/realm-export.json:/opt/keycloak/data/import/realm-export.json
+      - ./keycloak-import:/opt/keycloak/data/import
     ports:
       - "7080:7080"
       - "7443:7443"

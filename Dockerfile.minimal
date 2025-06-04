@@ -1,0 +1,69 @@
+FROM docker.io/lukemathwalker/cargo-chef:0.1.71-rust-1.86-bullseye AS chef
+WORKDIR /app
+
+FROM chef AS planner
+COPY . .
+RUN cargo chef prepare --recipe-path recipe.json
+
+FROM chef AS cacher
+ARG DATABASE_BACKEND=mysql
+ARG MYSQLCLIENT_PKG=libmariadb-dev-compat
+
+RUN \
+    if [ "$MYSQLCLIENT_PKG" = libmysqlclient-dev ] ; then \
+        wget -qO- https://repo.mysql.com/RPM-GPG-KEY-mysql-2023 > /etc/apt/trusted.gpg.d/mysql.asc && \
+        echo "deb https://repo.mysql.com/apt/debian/ bullseye mysql-8.0" >> /etc/apt/sources.list ; \
+    fi && \
+    apt-get -q update && \
+    apt-get -q install -y --no-install-recommends $MYSQLCLIENT_PKG cmake
+
+COPY --from=planner /app/recipe.json recipe.json
+RUN cargo chef cook --release --no-default-features --features=syncstorage-db/$DATABASE_BACKEND,keycloak  --recipe-path recipe.json
+
+FROM chef AS builder
+ARG DATABASE_BACKEND=mysql
+ARG MYSQLCLIENT_PKG=libmariadb-dev-compat
+
+COPY . /app
+COPY --from=cacher /app/target /app/target
+COPY --from=cacher /usr/local/cargo /app//usr/local/cargo
+
+RUN \
+    if [ "$MYSQLCLIENT_PKG" = libmysqlclient-dev ] ; then \
+        wget -qO- https://repo.mysql.com/RPM-GPG-KEY-mysql-2023 > /etc/apt/trusted.gpg.d/mysql.asc && \
+        echo "deb https://repo.mysql.com/apt/debian/ bullseye mysql-8.0" >> /etc/apt/sources.list ; \
+    fi && \
+    apt-get -q update && \
+    apt-get -q install -y --no-install-recommends $MYSQLCLIENT_PKG cmake && \
+    rm -rf /var/lib/apt/lists/*
+
+RUN \
+    cargo --version && \
+    rustc --version && \
+    cargo install --path ./syncserver --no-default-features --features=syncstorage-db/$DATABASE_BACKEND,keycloak --locked --root /app
+
+FROM docker.io/library/debian:bullseye-slim
+ARG MYSQLCLIENT_PKG=libmariadb-dev-compat
+
+WORKDIR /app
+
+RUN \
+    groupadd --gid 10001 app && \
+    useradd --uid 10001 --gid 10001 --home /app --create-home app && \
+    if [ "$MYSQLCLIENT_PKG" = libmysqlclient-dev ] ; then \
+        apt-get -q update && \
+        apt-get install -y gnupg ca-certificates wget && \
+        echo "deb https://repo.mysql.com/apt/debian/ bullseye mysql-8.0" >> /etc/apt/sources.list && \
+        wget -qO- https://repo.mysql.com/RPM-GPG-KEY-mysql-2023 > /etc/apt/trusted.gpg.d/mysql.asc ; \
+    fi && \
+    apt-get -q update && \
+    apt-get -q install -y libmariadb3 libssl1.1 libcurl4 ca-certificates && \
+    rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /app/bin /app/bin
+
+USER app:app
+
+EXPOSE 8000
+
+CMD ["/app/bin/syncserver"]

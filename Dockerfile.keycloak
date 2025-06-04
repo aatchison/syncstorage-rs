@@ -1,4 +1,4 @@
-ARG DATABASE_BACKEND=spanner
+ARG DATABASE_BACKEND=mysql
 # Alternatively MYSQLCLIENT_PKG=libmysqlclient-dev for the Oracle/MySQL official client
 ARG MYSQLCLIENT_PKG=libmariadb-dev-compat
 
@@ -98,10 +98,8 @@ COPY --from=builder /app/scripts/prepare-spanner.sh /app/scripts/prepare-spanner
 COPY --from=builder /app/scripts/start_mock_fxa_server.sh /app/scripts/start_mock_fxa_server.sh
 COPY --from=builder /app/syncstorage-spanner/src/schema.ddl /app/schema.ddl
 
-RUN chmod +x /app/scripts/prepare-spanner.sh
-RUN pip3 install -r /app/tools/integration_tests/requirements.txt
-RUN pip3 install -r /app/tools/tokenserver/requirements.txt
-
 USER app:app
 
-ENTRYPOINT ["/app/bin/syncserver"]
+EXPOSE 8000
+
+CMD ["/app/bin/syncserver"]

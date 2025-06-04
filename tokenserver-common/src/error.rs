@@ -3,6 +3,7 @@ use std::{cmp::PartialEq, error::Error, fmt};
 use actix_web::{HttpResponse, ResponseError};
 use backtrace::Backtrace;
 use http::StatusCode;
+#[cfg(feature = "py")]
 use pyo3::prelude::PyErr;
 use serde::{
     ser::{SerializeMap, Serializer},
@@ -326,6 +327,7 @@ impl InternalError for TokenserverError {
     }
 }
 
+#[cfg(feature = "py")]
 impl From<PyErr> for TokenserverError {
     fn from(err: PyErr) -> Self {
         InternalError::internal_error(err.to_string())

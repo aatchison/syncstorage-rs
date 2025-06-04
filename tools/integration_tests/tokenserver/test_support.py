@@ -103,9 +103,17 @@ class TestCase:
                 'client_secret': confidential_client_secret
             }
             
+            print(f"DEBUG: Attempting to get token from: {token_url}")
+            print(f"DEBUG: Request data: {data}")
+            
             response = requests.post(token_url, data=data, timeout=10)
+            print(f"DEBUG: Response status: {response.status_code}")
+            print(f"DEBUG: Response text: {response.text[:500]}")
+            
             if response.status_code == 200:
-                return response.json().get('access_token')
+                token = response.json().get('access_token')
+                print(f"DEBUG: Successfully got token: {token[:50] if token else 'None'}...")
+                return token
             else:
                 print(f"Failed to get Keycloak token: {response.status_code} - {response.text}")
                 return None

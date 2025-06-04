@@ -50,6 +50,12 @@ This implementation replaces the test mode bypass approach with real JWT token g
    - Maintains backward compatibility
    - Works when Keycloak is not available
 
+### Hostname Resolution
+
+The implementation automatically handles different environments:
+- **Docker Environment**: Uses internal hostname `keycloak:7080` when `KEYCLOAK_URL` environment variable is set
+- **Local Environment**: Falls back to `localhost:7080` for local development/testing
+
 ### Environment Variables
 
 The implementation automatically detects the OAuth provider type:

@@ -82,9 +82,15 @@ class TestCase:
         if not keycloak_base_url:
             return None
             
-        # Replace internal docker hostname with localhost for tests
-        keycloak_base_url = keycloak_base_url.replace('keycloak:7080', 'localhost:7080')
-        token_url = f"{keycloak_base_url}/protocol/openid-connect/token"
+        # Use the Keycloak URL as-is when running in Docker, or replace with localhost for local testing
+        # Check if we're running in Docker by looking for the KEYCLOAK_URL environment variable
+        if os.environ.get('KEYCLOAK_URL'):
+            # Running in Docker - use the internal hostname
+            token_url = f"{keycloak_base_url}/protocol/openid-connect/token"
+        else:
+            # Running locally - replace with localhost
+            keycloak_base_url = keycloak_base_url.replace('keycloak:7080', 'localhost:7080')
+            token_url = f"{keycloak_base_url}/protocol/openid-connect/token"
         
         # Use confidential client credentials
         confidential_client_secret = "YcdeiCc742lOk17poGhWT51GTAWMnQMr"

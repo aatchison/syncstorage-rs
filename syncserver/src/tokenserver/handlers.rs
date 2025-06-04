@@ -10,7 +10,7 @@ use serde_json::Value;
 use tokenserver_auth::{MakeTokenPlaintext, Tokenlib, TokenserverOrigin};
 use tokenserver_common::{NodeType, TokenserverError};
 use tokenserver_db::{
-    params::{GetNodeId, PostUser, PutUser, ReplaceUsers},
+    params::{GetNodeId, PostUser, PutUser, ReplaceUser, ReplaceUsers},
     Db,
 };
 use tokio::time::timeout;
@@ -152,11 +152,72 @@ async fn update_user(
     req: &TokenserverRequest,
     db: Box<dyn Db>,
 ) -> Result<UserUpdates, TokenserverError> {
-    // For OAuth/OIDC requests, use the values from the OAuth token and X-KeyID header
+    // For OAuth/OIDC requests, handle client_state changes like FxA
     if req.is_oauth {
+        // If the client state changed, we need to create a new user record
+        if req.auth_data.client_state != req.user.client_state {
+            let timestamp = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_millis() as i64;
+
+            // Create new user record with OAuth values
+            // For OAuth, use keys_changed_at as generation if generation is None
+            let oauth_generation = req.auth_data.generation
+                .or(req.auth_data.keys_changed_at)
+                .unwrap_or(req.user.generation);
+            
+            println!("ULTRATHINK DEBUG: OAuth client_state change - auth_generation: {:?}, auth_keys_changed_at: {:?}, oauth_generation: {}, user_generation: {}",
+                     req.auth_data.generation, req.auth_data.keys_changed_at, oauth_generation, req.user.generation);
+            
+            let post_user_params = PostUser {
+                service_id: req.service_id,
+                email: req.auth_data.email.clone(),
+                generation: oauth_generation,
+                client_state: req.auth_data.client_state.clone(),
+                node_id: apply_timeout(
+                    db.timeout(),
+                    db.get_node_id(GetNodeId {
+                        service_id: req.service_id,
+                        node: req.user.node.clone(),
+                    }),
+                )
+                .await?
+                .id,
+                keys_changed_at: req.auth_data.keys_changed_at,
+                created_at: timestamp,
+            };
+            let uid = apply_timeout(db.timeout(), db.post_user(post_user_params))
+                .await?
+                .id;
+
+            // Mark the old user as replaced
+            apply_timeout(
+                db.timeout(),
+                db.replace_user(ReplaceUser {
+                    uid: req.user.uid,
+                    service_id: req.service_id,
+                    replaced_at: timestamp,
+                }),
+            )
+            .await?;
+
+            return Ok(UserUpdates {
+                keys_changed_at: req.auth_data.keys_changed_at,
+                generation: oauth_generation,
+                uid,
+            });
+        }
+
+        // If client_state didn't change, just update the existing user
+        // For OAuth, use keys_changed_at as generation if generation is None
+        let oauth_generation = req.auth_data.generation
+            .or(req.auth_data.keys_changed_at)
+            .unwrap_or(req.user.generation);
+            
         return Ok(UserUpdates {
             keys_changed_at: req.auth_data.keys_changed_at,
-            generation: req.auth_data.generation.unwrap_or(req.user.generation),
+            generation: oauth_generation,
             uid: req.user.uid,
         });
     }

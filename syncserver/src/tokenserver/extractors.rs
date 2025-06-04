@@ -117,9 +117,22 @@ impl TokenserverRequest {
                     ));
                 }
                 
+                // For OAuth, client_state changes must still be accompanied by keys_changed_at changes
+                if self.auth_data.keys_changed_at.is_some() && 
+                   self.user.keys_changed_at.is_some() &&
+                   self.auth_data.keys_changed_at <= self.user.keys_changed_at {
+                    println!("ULTRATHINK DEBUG: OAuth client_state change rejected - no keys_changed_at change. auth: {:?}, user: {:?}", 
+                             self.auth_data.keys_changed_at, self.user.keys_changed_at);
+                    let error_message = "Unacceptable client-state value new value with no keys_changed_at change".to_owned();
+                    return Err(TokenserverError::invalid_client_state(
+                        error_message,
+                        None,
+                    ));
+                }
+                
                 // This is a legitimate client_state update for OAuth, allow it to proceed
-                println!("ULTRATHINK DEBUG: OAuth client_state update allowed - requested: {}, user: {}", 
-                         &self.auth_data.client_state, &self.user.client_state);
+                println!("ULTRATHINK DEBUG: OAuth client_state update allowed - requested: {}, user: {}, auth_keys_changed_at: {:?}, user_keys_changed_at: {:?}", 
+                         &self.auth_data.client_state, &self.user.client_state, self.auth_data.keys_changed_at, self.user.keys_changed_at);
             }
             
             // For OAuth, we don't validate FxA-specific fields
@@ -302,12 +315,29 @@ impl FromRequest for TokenserverRequest {
                     ));
                 }
             };
-            warn!("Looking up user"; "email" => &auth_data.email, "client_state" => &auth_data.client_state, "generation" => auth_data.generation, "keys_changed_at" => auth_data.keys_changed_at);
+            
+            // Check if this is an OAuth request by looking at the Authorization header
+            let is_oauth = req.headers()
+                .get("authorization")
+                .and_then(|auth_header| auth_header.to_str().ok())
+                .map(|auth_str| auth_str.starts_with("Bearer "))
+                .unwrap_or(false);
+            
+            // For OAuth, use keys_changed_at as generation if generation is None
+            let effective_generation = if is_oauth {
+                auth_data.generation
+                    .or(auth_data.keys_changed_at)
+                    .unwrap_or(0)
+            } else {
+                auth_data.generation.unwrap_or(0)
+            };
+            
+            warn!("Looking up user"; "email" => &auth_data.email, "client_state" => &auth_data.client_state, "generation" => auth_data.generation, "keys_changed_at" => auth_data.keys_changed_at, "is_oauth" => is_oauth, "effective_generation" => effective_generation);
             let user = db
                 .get_or_create_user(params::GetOrCreateUser {
                     service_id,
                     email: auth_data.email.clone(),
-                    generation: auth_data.generation.unwrap_or(0),
+                    generation: effective_generation,
                     client_state: auth_data.client_state.clone(),
                     keys_changed_at: auth_data.keys_changed_at,
                     capacity_release_rate: state.node_capacity_release_rate,
@@ -339,13 +369,6 @@ impl FromRequest for TokenserverRequest {
                     }
                 })
             };
-
-            // Check if this is an OAuth request by looking at the Authorization header
-            let is_oauth = req.headers()
-                .get("authorization")
-                .and_then(|auth_header| auth_header.to_str().ok())
-                .map(|auth_str| auth_str.starts_with("Bearer "))
-                .unwrap_or(false);
 
             let tokenserver_request = TokenserverRequest {
                 user,

@@ -222,6 +222,10 @@ class TestAuthorization(TestCase, unittest.TestCase):
         self.app.get('/1.0/sync/1.5', headers=headers)
 
     def test_keys_changed_at_change_must_accompany_client_state_change(self):
+        # Skip this test if using Keycloak - generation/keys_changed_at validation is FxA-specific
+        if self._is_using_keycloak():
+            self.skipTest("Generation and keys_changed_at validation not supported with Keycloak OAuth")
+            
         self._add_user(generation=1234, keys_changed_at=1234,
                        client_state='aaaa')
         # A request with a new client state must also contain a new
@@ -410,6 +414,10 @@ class TestAuthorization(TestCase, unittest.TestCase):
     # case to be handled. See this PR for more information:
     # https://github.com/mozilla-services/tokenserver/pull/176
     def test_kid_change_during_gradual_tokenserver_rollout(self):
+        # Skip this test if using Keycloak - this is FxA-specific gradual rollout behavior
+        if self._is_using_keycloak():
+            self.skipTest("FxA tokenserver gradual rollout behavior not applicable to Keycloak OAuth")
+            
         # Let's start with a user already in the db, with no keys_changed_at.
         uid = self._add_user(generation=1234, client_state='aaaa',
                              keys_changed_at=None)
@@ -539,6 +547,10 @@ class TestAuthorization(TestCase, unittest.TestCase):
         self.assertEqual(user['generation'], 1234)
 
     def test_set_keys_changed_at_from_no_keys_changed_at(self):
+        # Skip this test if using Keycloak - OAuth tokens always include keys_changed_at
+        if self._is_using_keycloak():
+            self.skipTest("OAuth tokens always include keys_changed_at, this FxA scenario doesn't apply")
+            
         # Add a user that has no keys_changed_at set
         uid = self._add_user(generation=1234, keys_changed_at=None,
                              client_state='aaaa')

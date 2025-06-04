@@ -80,6 +80,7 @@ services:
       SYNC_TOKENSERVER__OAUTH_PROVIDER: "keycloak"
       SYNC_TOKENSERVER__OIDC_ISSUER_URL: "http://keycloak:7080/realms/sync"
       SYNC_TOKENSERVER__FXA_OAUTH_SERVER_URL: "http://keycloak:7080/realms/sync"
+      SYNC_TOKENSERVER__KEYCLOAK_SERVER_URL: "http://keycloak:7080"
       SYNC_TOKENSERVER__FXA_EMAIL_DOMAIN: "localhost"
       SYNC_TOKENSERVER__FXA_METRICS_HASH_SECRET: "secret0"
       RUST_BACKTRACE: 1

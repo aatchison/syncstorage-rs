@@ -101,13 +101,25 @@ impl TokenserverRequest {
                 ));
             }
 
-            // For OAuth, we allow client_state updates and only reject if user was replaced
-            // The OAuth token verification already ensures the request is valid
+            // For OAuth, check if the requested client_state belongs to a replaced user
             if self.auth_data.client_state != self.user.client_state {
-                println!("ULTRATHINK DEBUG: OAuth client_state update - requested: {}, user: {}, uid: {}", 
+                println!("ULTRATHINK DEBUG: OAuth client_state mismatch - requested: {}, user: {}, uid: {}", 
                          &self.auth_data.client_state, &self.user.client_state, self.user.uid);
+                
+                // Check if the requested client_state is in the old_client_states (replaced users)
+                if self.user.old_client_states.contains(&self.auth_data.client_state) {
+                    println!("ULTRATHINK DEBUG: OAuth client_state is stale - requested: {}, old_states: {:?}", 
+                             &self.auth_data.client_state, &self.user.old_client_states);
+                    let error_message = "Unacceptable client-state value stale value".to_owned();
+                    return Err(TokenserverError::invalid_client_state(
+                        error_message,
+                        Some(vec![("is_stale", "true".to_owned())]),
+                    ));
+                }
+                
                 // This is a legitimate client_state update for OAuth, allow it to proceed
-                // The update_user function will handle updating the user record
+                println!("ULTRATHINK DEBUG: OAuth client_state update allowed - requested: {}, user: {}", 
+                         &self.auth_data.client_state, &self.user.client_state);
             }
             
             // For OAuth, we don't validate FxA-specific fields

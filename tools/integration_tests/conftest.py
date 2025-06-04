@@ -155,15 +155,19 @@ def setup_server_end_to_end_testing():
     # done against the "run_end_to_end_tests" prior, of if we
     # just do it in _set_local_test_env_vars...
     if JWK_CACHE_DISABLED:
-        del os.environ["SYNC_TOKENSERVER__FXA_OAUTH_PRIMARY_JWK__KTY"]
-        del os.environ["SYNC_TOKENSERVER__FXA_OAUTH_PRIMARY_JWK__ALG"]
-        del os.environ["SYNC_TOKENSERVER__FXA_OAUTH_PRIMARY_JWK__KID"]
-        del os.environ[
-            "SYNC_TOKENSERVER__FXA_OAUTH_PRIMARY_JWK__FXA_CREATED_AT"
+        # Only delete FxA JWK environment variables if they exist
+        fxa_jwk_vars = [
+            "SYNC_TOKENSERVER__FXA_OAUTH_PRIMARY_JWK__KTY",
+            "SYNC_TOKENSERVER__FXA_OAUTH_PRIMARY_JWK__ALG",
+            "SYNC_TOKENSERVER__FXA_OAUTH_PRIMARY_JWK__KID",
+            "SYNC_TOKENSERVER__FXA_OAUTH_PRIMARY_JWK__FXA_CREATED_AT",
+            "SYNC_TOKENSERVER__FXA_OAUTH_PRIMARY_JWK__USE",
+            "SYNC_TOKENSERVER__FXA_OAUTH_PRIMARY_JWK__N",
+            "SYNC_TOKENSERVER__FXA_OAUTH_PRIMARY_JWK__E"
         ]
-        del os.environ["SYNC_TOKENSERVER__FXA_OAUTH_PRIMARY_JWK__USE"]
-        del os.environ["SYNC_TOKENSERVER__FXA_OAUTH_PRIMARY_JWK__N"]
-        del os.environ["SYNC_TOKENSERVER__FXA_OAUTH_PRIMARY_JWK__E"]
+        for var in fxa_jwk_vars:
+            if var in os.environ:
+                del os.environ[var]
 
     # Set OAuth-specific environment variables
     os.environ["SYNC_TOKENSERVER__FXA_OAUTH_SERVER_URL"] = \

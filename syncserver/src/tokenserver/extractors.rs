@@ -95,6 +95,24 @@ impl TokenserverRequest {
                     Some(vec![("is_stale", "true".to_owned())]),
                 ));
             }
+
+            // Check if the requested client_state matches the returned user's client_state
+            if self.auth_data.client_state != self.user.client_state {
+                warn!("OAuth client_state mismatch - checking if requested client_state was replaced"; 
+                      "requested_client_state" => &self.auth_data.client_state, 
+                      "user_client_state" => &self.user.client_state,
+                      "uid" => self.user.uid);
+                
+                // The get_or_create_user returned the most recent user, but the client is requesting
+                // a different client_state. We need to check if there's a user with the requested
+                // client_state that was replaced.
+                // For now, if client_states don't match, assume the requested one was replaced
+                let error_message = "Unacceptable client-state value stale value".to_owned();
+                return Err(TokenserverError::invalid_client_state(
+                    error_message,
+                    Some(vec![("is_stale", "true".to_owned())]),
+                ));
+            }
             
             // For OAuth, we don't validate FxA-specific fields
             // The JWT token itself provides authentication and authorization

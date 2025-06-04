@@ -209,11 +209,25 @@ async fn update_user(
             });
         }
 
-        // If client_state didn't change, just update the existing user
+        // If client_state didn't change, update the existing user
         // For OAuth, use keys_changed_at as generation if generation is None
         let oauth_generation = req.auth_data.generation
             .or(req.auth_data.keys_changed_at)
             .unwrap_or(req.user.generation);
+            
+        // Update the user record if generation or keys_changed_at changed
+        if oauth_generation != req.user.generation || req.auth_data.keys_changed_at != req.user.keys_changed_at {
+            println!("ULTRATHINK DEBUG: OAuth user update - old_generation: {}, new_generation: {}, old_keys_changed_at: {:?}, new_keys_changed_at: {:?}",
+                     req.user.generation, oauth_generation, req.user.keys_changed_at, req.auth_data.keys_changed_at);
+            let params = PutUser {
+                email: req.auth_data.email.clone(),
+                service_id: req.service_id,
+                generation: oauth_generation,
+                keys_changed_at: req.auth_data.keys_changed_at,
+            };
+
+            apply_timeout(db.timeout(), db.put_user(params)).await?;
+        }
             
         return Ok(UserUpdates {
             keys_changed_at: req.auth_data.keys_changed_at,

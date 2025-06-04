@@ -336,12 +336,11 @@ impl FromRequest for TokenserverRequest {
                 }
             };
             
-            // Check if this is an OAuth request by looking at the Authorization header
-            let is_oauth = req.headers()
-                .get("authorization")
-                .and_then(|auth_header| auth_header.to_str().ok())
-                .map(|auth_str| auth_str.starts_with("Bearer "))
-                .unwrap_or(false);
+            // Check if this is an OAuth request by looking at the OAUTH_PROVIDER_TYPE setting
+            // Both FxA and OAuth/OIDC can use Bearer tokens, so we need to check the provider type
+            let is_oauth = std::env::var("SYNC_TOKENSERVER__OAUTH_PROVIDER_TYPE")
+                .unwrap_or_else(|_| "fxa".to_string())
+                .to_lowercase() == "oidc";
             
             // For OAuth, use keys_changed_at as generation if generation is None
             let effective_generation = if is_oauth {

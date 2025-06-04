@@ -117,6 +117,12 @@ class TestCase:
 
     def _is_using_keycloak(self):
         """Check if we're using Keycloak for OAuth instead of FxA"""
+        # First check if the OAuth provider type is explicitly set to OIDC
+        oauth_provider_type = os.environ.get('SYNC_TOKENSERVER__OAUTH_PROVIDER_TYPE', 'fxa')
+        if oauth_provider_type != 'oidc':
+            return False
+        
+        # If OIDC is configured, verify we can actually get a Keycloak token
         return self._get_keycloak_token() is not None
 
     def _build_oauth_headers(self, generation=None, user='test',

@@ -1,6 +1,7 @@
 # This Source Code Form is subject to the terms of the Mozilla Public
 # License, v. 2.0. If a copy of the MPL was not distributed with this file,
 # You can obtain one at http://mozilla.org/MPL/2.0/.
+import os
 import pytest
 import unittest
 
@@ -134,7 +135,15 @@ class TestMisc(TestCase, unittest.TestCase):
         self.assertEqual(user['keys_changed_at'], 1234)
         self.assertEqual(user['client_state'], 'aaaa')
         # Get all the replaced users
-        email = 'test@%s' % self.FXA_EMAIL_DOMAIN
+        # Use the correct email format based on OAuth provider
+        oauth_provider_type = os.environ.get('SYNC_TOKENSERVER__OAUTH_PROVIDER_TYPE', 'fxa')
+        if oauth_provider_type == 'oidc':
+            # When using Keycloak OIDC, use the service account UUID
+            keycloak_service_account_uuid = '468ee2d8-047a-497a-9247-f8e7056608a6'
+            email = f'{keycloak_service_account_uuid}@localhost'
+        else:
+            # Default FxA format
+            email = 'test@%s' % self.FXA_EMAIL_DOMAIN
         replaced_users = self._get_replaced_users(self.service_id,
                                                   email)
         # Only one user should be replaced

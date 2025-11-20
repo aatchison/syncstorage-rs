@@ -145,7 +145,9 @@ impl JWTVerifier for JWTVerifierImpl {
                 } else {
                     typ
                 };
-                if typ.to_lowercase() != "application/at+jwt" {
+                let typ_lower = typ.to_lowercase();
+                // Accept both "application/at+jwt" (RFC 9068) and "application/jwt" (common default)
+                if typ_lower != "application/at+jwt" && typ_lower != "application/jwt" {
                     return Err(OAuthVerifyError::TrustError);
                 }
                 Ok(typ)

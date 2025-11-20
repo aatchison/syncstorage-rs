@@ -1,0 +1,3702 @@
+============================= test session starts ==============================
+platform linux -- Python 3.9.2, pytest-8.3.5, pluggy-1.6.0
+rootdir: /app
+collected 102 items
+
+tools/integration_tests/test_storage.py ................................ [ 31%]
+.......................s.......                                          [ 61%]
+tools/integration_tests/tokenserver/test_authorization.py FFFFF.FFFF.FFF [ 75%]
+F.FFFF                                                                   [ 81%]
+tools/integration_tests/tokenserver/test_e2e.py .F                       [ 83%]
+tools/integration_tests/tokenserver/test_misc.py FFFFFFFFFFFFF           [ 96%]
+tools/integration_tests/tokenserver/test_node_assignment.py FFFF         [100%]
+
+=================================== FAILURES ===================================
+_______________ TestAuthorization.test_client_specified_duration _______________
+
+self = <tokenserver.test_authorization.TestAuthorization testMethod=test_client_specified_duration>
+
+    def test_client_specified_duration(self):
+        self._add_user(generation=1234, keys_changed_at=1234,
+                       client_state='aaaa')
+        headers = self._build_auth_headers(generation=1234,
+                                           keys_changed_at=1234,
+                                           client_state='aaaa')
+        # It's ok to request a shorter-duration token.
+>       res = self.app.get('/1.0/sync/1.5?duration=12', headers=headers)
+
+tools/integration_tests/tokenserver/test_authorization.py:374: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:328: in get
+    return self.do_request(req, status=status,
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:653: in do_request
+    self._check_status(status, res)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <webtest.app.TestApp object at 0x7fd1ec03efa0>, status = None
+res = <401 Unauthorized application/json body=b'{"status..."}]}'/102>
+
+    def _check_status(self, status, res):
+        if status == '*':
+            return
+        res_status = res.status
+        if (isinstance(status, str) and '*' in status):
+            if re.match(fnmatch.translate(status), res_status, re.I):
+                return
+        if isinstance(status, str):
+            if status == res_status:
+                return
+        if isinstance(status, (list, tuple)):
+            if res.status_int not in status:
+                raise AppError(
+                    "Bad response: %s (not one of %s for %s)\n%s",
+                    res_status, ', '.join(map(str, status)),
+                    res.request.url, res)
+            return
+        if status is None:
+            if res.status_int >= 200 and res.status_int < 400:
+                return
+>           raise AppError(
+                "Bad response: %s (not 200 OK or 3xx redirect for %s)\n%s",
+                res_status, res.request.url,
+                res)
+E           webtest.app.AppError: Bad response: 401 Unauthorized (not 200 OK or 3xx redirect for http://localhost:8000/1.0/sync/1.5?duration=12)
+E           b'{"status":"invalid-credentials","errors":[{"location":"body","name":"","description":"Unauthorized"}]}'
+
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:682: AppError
+----------------------------- Captured stderr call -----------------------------
+
+thread 'main' panicked at /app/syncserver/src/server/mod.rs:355:14:
+Could not get Server in Server::with_settings: Os { code: 98, kind: AddrInUse, message: "Address already in use" }
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+___________ TestAuthorization.test_disallow_reusing_old_client_state ___________
+
+self = <tokenserver.test_authorization.TestAuthorization testMethod=test_disallow_reusing_old_client_state>
+
+    def test_disallow_reusing_old_client_state(self):
+        # Add a user record that has already been replaced
+        self._add_user(client_state='aaaa', replaced_at=1200)
+        # Add the most up-to-date user record
+        self._add_user(client_state='bbbb')
+        # A request cannot use a client state associated with a replaced user
+        headers = self._build_auth_headers(generation=1234,
+                                           keys_changed_at=1234,
+                                           client_state='aaaa')
+        res = self.app.get('/1.0/sync/1.5', headers=headers, status=401)
+        expected_error_response = {
+            'status': 'invalid-client-state',
+            'errors': [
+                {
+                    'location': 'header',
+                    'name': 'X-Client-State',
+                    'description': 'Unacceptable client-state value stale '
+                                   'value'
+                }
+            ]
+        }
+>       self.assertEqual(res.json, expected_error_response)
+E       AssertionError: {'status': 'invalid-credentials', 'errors': [{'location': 'bod[43 chars]d'}]} != {'status': 'invalid-client-state', 'errors': [{'location': 'he[91 chars]e'}]}
+E       - {'errors': [{'description': 'Unauthorized', 'location': 'body', 'name': ''}],
+E       + {'errors': [{'description': 'Unacceptable client-state value stale value',
+E       +              'location': 'header',
+E       +              'name': 'X-Client-State'}],
+E       -  'status': 'invalid-credentials'}
+E       ?                      ^^^   ^ ^^
+E       
+E       +  'status': 'invalid-client-state'}
+E       ?                      ^^   ^^^ ^^
+
+tools/integration_tests/tokenserver/test_authorization.py:151: AssertionError
+____________________ TestAuthorization.test_fxa_kid_change _____________________
+
+self = <tokenserver.test_authorization.TestAuthorization testMethod=test_fxa_kid_change>
+
+    def test_fxa_kid_change(self):
+        self._add_user(generation=1234, keys_changed_at=None,
+                       client_state='aaaa')
+        # An OAuth client shows up, setting keys_changed_at.
+        # (The value matches generation number above, beause in this scenario
+        # FxA hasn't been updated to track and report keysChangedAt yet).
+        headers = self._build_auth_headers(generation=1234,
+                                           keys_changed_at=1234,
+                                           client_state='aaaa')
+>       res = self.app.get('/1.0/sync/1.5', headers=headers)
+
+tools/integration_tests/tokenserver/test_authorization.py:327: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:328: in get
+    return self.do_request(req, status=status,
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:653: in do_request
+    self._check_status(status, res)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <webtest.app.TestApp object at 0x7fd1ec9b69d0>, status = None
+res = <401 Unauthorized application/json body=b'{"status..."}]}'/102>
+
+    def _check_status(self, status, res):
+        if status == '*':
+            return
+        res_status = res.status
+        if (isinstance(status, str) and '*' in status):
+            if re.match(fnmatch.translate(status), res_status, re.I):
+                return
+        if isinstance(status, str):
+            if status == res_status:
+                return
+        if isinstance(status, (list, tuple)):
+            if res.status_int not in status:
+                raise AppError(
+                    "Bad response: %s (not one of %s for %s)\n%s",
+                    res_status, ', '.join(map(str, status)),
+                    res.request.url, res)
+            return
+        if status is None:
+            if res.status_int >= 200 and res.status_int < 400:
+                return
+>           raise AppError(
+                "Bad response: %s (not 200 OK or 3xx redirect for %s)\n%s",
+                res_status, res.request.url,
+                res)
+E           webtest.app.AppError: Bad response: 401 Unauthorized (not 200 OK or 3xx redirect for http://localhost:8000/1.0/sync/1.5)
+E           b'{"status":"invalid-credentials","errors":[{"location":"body","name":"","description":"Unauthorized"}]}'
+
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:682: AppError
+_ TestAuthorization.test_generation_change_must_accompany_client_state_change __
+
+self = <tokenserver.test_authorization.TestAuthorization testMethod=test_generation_change_must_accompany_client_state_change>
+
+    def test_generation_change_must_accompany_client_state_change(self):
+        self._add_user(generation=1234, client_state='aaaa')
+        # A request with a new client state must also contain a new generation
+        headers = self._build_auth_headers(generation=1234,
+                                           keys_changed_at=1234,
+                                           client_state='bbbb')
+        res = self.app.get('/1.0/sync/1.5', headers=headers, status=401)
+        expected_error_response = {
+            'status': 'invalid-client-state',
+            'errors': [
+                {
+                    'location': 'header',
+                    'name': 'X-Client-State',
+                    'description': 'Unacceptable client-state value new '
+                                   'value with no generation change'
+                }
+            ]
+        }
+>       self.assertEqual(res.json, expected_error_response)
+E       AssertionError: {'status': 'invalid-credentials', 'errors': [{'location': 'bod[43 chars]d'}]} != {'status': 'invalid-client-state', 'errors': [{'location': 'he[115 chars]e'}]}
+E       - {'errors': [{'description': 'Unauthorized', 'location': 'body', 'name': ''}],
+E       + {'errors': [{'description': 'Unacceptable client-state value new value with no '
+E       +                             'generation change',
+E       +              'location': 'header',
+E       +              'name': 'X-Client-State'}],
+E       -  'status': 'invalid-credentials'}
+E       ?                      ^^^   ^ ^^
+E       
+E       +  'status': 'invalid-client-state'}
+E       ?                      ^^   ^^^ ^^
+
+tools/integration_tests/tokenserver/test_authorization.py:184: AssertionError
+___ TestAuthorization.test_generation_must_not_be_less_than_last_seen_value ____
+
+self = <tokenserver.test_authorization.TestAuthorization testMethod=test_generation_must_not_be_less_than_last_seen_value>
+
+    def test_generation_must_not_be_less_than_last_seen_value(self):
+        uid = self._add_user(generation=1234)
+        # The generation in the request cannot be less than the generation
+        # currently stored on the user record
+        headers = self._build_auth_headers(generation=1233,
+                                           keys_changed_at=1234,
+                                           client_state='aaaa')
+        res = self.app.get('/1.0/sync/1.5', headers=headers, status=401)
+        expected_error_response = {
+            'status': 'invalid-generation',
+            'errors': [
+                {
+                    'location': 'body',
+                    'name': '',
+                    'description': 'Unauthorized',
+                }
+            ]
+        }
+>       self.assertEqual(res.json, expected_error_response)
+E       AssertionError: {'status': 'invalid-credentials', 'errors': [{'location': 'bo[44 chars]d'}]} != {'status': 'invalid-generation', 'errors': [{'location': 'bod[43 chars]d'}]}
+E         {'errors': [{'description': 'Unauthorized', 'location': 'body', 'name': ''}],
+E       -  'status': 'invalid-credentials'}
+E       ?                     ^^^^    ^^^
+E       
+E       +  'status': 'invalid-generation'}
+E       ?                     ^  +++  ^^
+
+tools/integration_tests/tokenserver/test_authorization.py:261: AssertionError
+________ TestAuthorization.test_invalid_client_state_in_x_client_state _________
+
+self = <tokenserver.test_authorization.TestAuthorization testMethod=test_invalid_client_state_in_x_client_state>
+
+    def test_invalid_client_state_in_x_client_state(self):
+        additional_headers = {'X-Client-State': 'state!'}
+        headers = self._build_auth_headers(generation=1234,
+                                           keys_changed_at=1234,
+                                           client_state='aaaa',
+                                           **additional_headers)
+    
+>       res = self.app.get('/1.0/sync/1.5', headers=headers, status=400)
+
+tools/integration_tests/tokenserver/test_authorization.py:78: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:328: in get
+    return self.do_request(req, status=status,
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:653: in do_request
+    self._check_status(status, res)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <webtest.app.TestApp object at 0x7fd1ec46cbe0>, status = 400
+res = <401 Unauthorized application/json body=b'{"status..."}]}'/102>
+
+    def _check_status(self, status, res):
+        if status == '*':
+            return
+        res_status = res.status
+        if (isinstance(status, str) and '*' in status):
+            if re.match(fnmatch.translate(status), res_status, re.I):
+                return
+        if isinstance(status, str):
+            if status == res_status:
+                return
+        if isinstance(status, (list, tuple)):
+            if res.status_int not in status:
+                raise AppError(
+                    "Bad response: %s (not one of %s for %s)\n%s",
+                    res_status, ', '.join(map(str, status)),
+                    res.request.url, res)
+            return
+        if status is None:
+            if res.status_int >= 200 and res.status_int < 400:
+                return
+            raise AppError(
+                "Bad response: %s (not 200 OK or 3xx redirect for %s)\n%s",
+                res_status, res.request.url,
+                res)
+        if status != res.status_int:
+>           raise AppError(
+                "Bad response: %s (not %s)\n%s", res_status, status, res)
+E           webtest.app.AppError: Bad response: 401 Unauthorized (not 400)
+E           b'{"status":"invalid-credentials","errors":[{"location":"body","name":"","description":"Unauthorized"}]}'
+
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:687: AppError
+_ TestAuthorization.test_keys_changed_at_change_must_accompany_client_state_change _
+
+self = <tokenserver.test_authorization.TestAuthorization testMethod=test_keys_changed_at_change_must_accompany_client_state_change>
+
+    def test_keys_changed_at_change_must_accompany_client_state_change(self):
+        self._add_user(generation=1234, keys_changed_at=1234,
+                       client_state='aaaa')
+        # A request with a new client state must also contain a new
+        # keys_changed_at
+        headers = self._build_auth_headers(generation=1235,
+                                           keys_changed_at=1234,
+                                           client_state='bbbb')
+        res = self.app.get('/1.0/sync/1.5', headers=headers, status=401)
+        expected_error_response = {
+            'status': 'invalid-client-state',
+            'errors': [
+                {
+                    'location': 'header',
+                    'name': 'X-Client-State',
+                    'description': 'Unacceptable client-state value new '
+                                   'value with no keys_changed_at change'
+                }
+            ]
+        }
+>       self.assertEqual(res.json, expected_error_response)
+E       AssertionError: {'status': 'invalid-credentials', 'errors': [{'location': 'bod[43 chars]d'}]} != {'status': 'invalid-client-state', 'errors': [{'location': 'he[120 chars]e'}]}
+E       - {'errors': [{'description': 'Unauthorized', 'location': 'body', 'name': ''}],
+E       + {'errors': [{'description': 'Unacceptable client-state value new value with no '
+E       +                             'keys_changed_at change',
+E       +              'location': 'header',
+E       +              'name': 'X-Client-State'}],
+E       -  'status': 'invalid-credentials'}
+E       ?                      ^^^   ^ ^^
+E       
+E       +  'status': 'invalid-client-state'}
+E       ?                      ^^   ^^^ ^^
+
+tools/integration_tests/tokenserver/test_authorization.py:236: AssertionError
+_____ TestAuthorization.test_keys_changed_at_less_than_equal_to_generation _____
+
+self = <tokenserver.test_authorization.TestAuthorization testMethod=test_keys_changed_at_less_than_equal_to_generation>
+
+    def test_keys_changed_at_less_than_equal_to_generation(self):
+        self._add_user(generation=1232, keys_changed_at=1234)
+        # If keys_changed_at changes, that change must be less than or equal
+        # to the new generation
+        headers = self._build_auth_headers(generation=1235,
+                                           keys_changed_at=1236,
+                                           client_state='aaaa')
+        res = self.app.get('/1.0/sync/1.5', headers=headers, status=401)
+        expected_error_response = {
+            'status': 'invalid-keysChangedAt',
+            'errors': [
+                {
+                    'location': 'body',
+                    'name': '',
+                    'description': 'Unauthorized'
+                }
+            ]
+        }
+>       self.assertEqual(res.json, expected_error_response)
+E       AssertionError: {'status': 'invalid-credentials', 'errors': [{'location': 'bo[44 chars]d'}]} != {'status': 'invalid-keysChangedAt', 'errors': [{'location': '[46 chars]d'}]}
+E         {'errors': [{'description': 'Unauthorized', 'location': 'body', 'name': ''}],
+E       -  'status': 'invalid-credentials'}
+E       +  'status': 'invalid-keysChangedAt'}
+
+tools/integration_tests/tokenserver/test_authorization.py:110: AssertionError
+_____ TestAuthorization.test_kid_change_during_gradual_tokenserver_rollout _____
+
+self = <tokenserver.test_authorization.TestAuthorization testMethod=test_kid_change_during_gradual_tokenserver_rollout>
+
+    def test_kid_change_during_gradual_tokenserver_rollout(self):
+        # Let's start with a user already in the db, with no keys_changed_at.
+        uid = self._add_user(generation=1234, client_state='aaaa',
+                             keys_changed_at=None)
+        user1 = self._get_user(uid)
+        # User hits updated tokenserver node, writing keys_changed_at to db.
+        headers = self._build_auth_headers(generation=1234,
+                                           keys_changed_at=1200,
+                                           client_state='aaaa')
+>       res = self.app.get('/1.0/sync/1.5', headers=headers)
+
+tools/integration_tests/tokenserver/test_authorization.py:397: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:328: in get
+    return self.do_request(req, status=status,
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:653: in do_request
+    self._check_status(status, res)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <webtest.app.TestApp object at 0x7fd1ec542af0>, status = None
+res = <401 Unauthorized application/json body=b'{"status..."}]}'/102>
+
+    def _check_status(self, status, res):
+        if status == '*':
+            return
+        res_status = res.status
+        if (isinstance(status, str) and '*' in status):
+            if re.match(fnmatch.translate(status), res_status, re.I):
+                return
+        if isinstance(status, str):
+            if status == res_status:
+                return
+        if isinstance(status, (list, tuple)):
+            if res.status_int not in status:
+                raise AppError(
+                    "Bad response: %s (not one of %s for %s)\n%s",
+                    res_status, ', '.join(map(str, status)),
+                    res.request.url, res)
+            return
+        if status is None:
+            if res.status_int >= 200 and res.status_int < 400:
+                return
+>           raise AppError(
+                "Bad response: %s (not 200 OK or 3xx redirect for %s)\n%s",
+                res_status, res.request.url,
+                res)
+E           webtest.app.AppError: Bad response: 401 Unauthorized (not 200 OK or 3xx redirect for http://localhost:8000/1.0/sync/1.5)
+E           b'{"status":"invalid-credentials","errors":[{"location":"body","name":"","description":"Unauthorized"}]}'
+
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:682: AppError
+___________ TestAuthorization.test_set_generation_from_no_generation ___________
+
+self = <tokenserver.test_authorization.TestAuthorization testMethod=test_set_generation_from_no_generation>
+
+    def test_set_generation_from_no_generation(self):
+        # Add a user that has no generation set
+        uid = self._add_user(generation=0, keys_changed_at=None,
+                             client_state='aaaa')
+        headers = self._build_auth_headers(generation=1234,
+                                           keys_changed_at=1234,
+                                           client_state='aaaa')
+        # Send a request to set the generation
+>       self.app.get('/1.0/sync/1.5', headers=headers)
+
+tools/integration_tests/tokenserver/test_authorization.py:508: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:328: in get
+    return self.do_request(req, status=status,
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:653: in do_request
+    self._check_status(status, res)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <webtest.app.TestApp object at 0x7fd1ec7f1df0>, status = None
+res = <401 Unauthorized application/json body=b'{"status..."}]}'/102>
+
+    def _check_status(self, status, res):
+        if status == '*':
+            return
+        res_status = res.status
+        if (isinstance(status, str) and '*' in status):
+            if re.match(fnmatch.translate(status), res_status, re.I):
+                return
+        if isinstance(status, str):
+            if status == res_status:
+                return
+        if isinstance(status, (list, tuple)):
+            if res.status_int not in status:
+                raise AppError(
+                    "Bad response: %s (not one of %s for %s)\n%s",
+                    res_status, ', '.join(map(str, status)),
+                    res.request.url, res)
+            return
+        if status is None:
+            if res.status_int >= 200 and res.status_int < 400:
+                return
+>           raise AppError(
+                "Bad response: %s (not 200 OK or 3xx redirect for %s)\n%s",
+                res_status, res.request.url,
+                res)
+E           webtest.app.AppError: Bad response: 401 Unauthorized (not 200 OK or 3xx redirect for http://localhost:8000/1.0/sync/1.5)
+E           b'{"status":"invalid-credentials","errors":[{"location":"body","name":"","description":"Unauthorized"}]}'
+
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:682: AppError
+_ TestAuthorization.test_set_generation_unchanged_without_keys_changed_at_update _
+
+self = <tokenserver.test_authorization.TestAuthorization testMethod=test_set_generation_unchanged_without_keys_changed_at_update>
+
+    def test_set_generation_unchanged_without_keys_changed_at_update(self):
+        # Add a user who has never sent us a generation
+        uid = self._add_user(generation=0, keys_changed_at=1234,
+                             client_state='aaaa')
+        # Send a request without a generation that doesn't update
+        # keys_changed_at
+        headers = self._build_auth_headers(generation=None,
+                                           keys_changed_at=1234,
+                                           client_state='aaaa')
+>       self.app.get('/1.0/sync/1.5', headers=headers)
+
+tools/integration_tests/tokenserver/test_authorization.py:291: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:328: in get
+    return self.do_request(req, status=status,
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:653: in do_request
+    self._check_status(status, res)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <webtest.app.TestApp object at 0x7fd1ec357e80>, status = None
+res = <401 Unauthorized application/json body=b'{"status..."}]}'/102>
+
+    def _check_status(self, status, res):
+        if status == '*':
+            return
+        res_status = res.status
+        if (isinstance(status, str) and '*' in status):
+            if re.match(fnmatch.translate(status), res_status, re.I):
+                return
+        if isinstance(status, str):
+            if status == res_status:
+                return
+        if isinstance(status, (list, tuple)):
+            if res.status_int not in status:
+                raise AppError(
+                    "Bad response: %s (not one of %s for %s)\n%s",
+                    res_status, ', '.join(map(str, status)),
+                    res.request.url, res)
+            return
+        if status is None:
+            if res.status_int >= 200 and res.status_int < 400:
+                return
+>           raise AppError(
+                "Bad response: %s (not 200 OK or 3xx redirect for %s)\n%s",
+                res_status, res.request.url,
+                res)
+E           webtest.app.AppError: Bad response: 401 Unauthorized (not 200 OK or 3xx redirect for http://localhost:8000/1.0/sync/1.5)
+E           b'{"status":"invalid-credentials","errors":[{"location":"body","name":"","description":"Unauthorized"}]}'
+
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:682: AppError
+__ TestAuthorization.test_set_generation_with_keys_changed_at_initialization ___
+
+self = <tokenserver.test_authorization.TestAuthorization testMethod=test_set_generation_with_keys_changed_at_initialization>
+
+    def test_set_generation_with_keys_changed_at_initialization(self):
+        # Add a user who has never sent us a generation or a keys_changed_at
+        uid = self._add_user(generation=0, keys_changed_at=None,
+                             client_state='aaaa')
+    
+        # Send a request without a generation that updates keys_changed_at
+        headers = self._build_auth_headers(generation=None,
+                                           keys_changed_at=1234,
+                                           client_state='aaaa')
+>       self.app.get('/1.0/sync/1.5', headers=headers)
+
+tools/integration_tests/tokenserver/test_authorization.py:313: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:328: in get
+    return self.do_request(req, status=status,
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:653: in do_request
+    self._check_status(status, res)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <webtest.app.TestApp object at 0x7fd1ec7d3850>, status = None
+res = <401 Unauthorized application/json body=b'{"status..."}]}'/102>
+
+    def _check_status(self, status, res):
+        if status == '*':
+            return
+        res_status = res.status
+        if (isinstance(status, str) and '*' in status):
+            if re.match(fnmatch.translate(status), res_status, re.I):
+                return
+        if isinstance(status, str):
+            if status == res_status:
+                return
+        if isinstance(status, (list, tuple)):
+            if res.status_int not in status:
+                raise AppError(
+                    "Bad response: %s (not one of %s for %s)\n%s",
+                    res_status, ', '.join(map(str, status)),
+                    res.request.url, res)
+            return
+        if status is None:
+            if res.status_int >= 200 and res.status_int < 400:
+                return
+>           raise AppError(
+                "Bad response: %s (not 200 OK or 3xx redirect for %s)\n%s",
+                res_status, res.request.url,
+                res)
+E           webtest.app.AppError: Bad response: 401 Unauthorized (not 200 OK or 3xx redirect for http://localhost:8000/1.0/sync/1.5)
+E           b'{"status":"invalid-credentials","errors":[{"location":"body","name":"","description":"Unauthorized"}]}'
+
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:682: AppError
+______ TestAuthorization.test_set_keys_changed_at_from_no_keys_changed_at ______
+
+self = <tokenserver.test_authorization.TestAuthorization testMethod=test_set_keys_changed_at_from_no_keys_changed_at>
+
+    def test_set_keys_changed_at_from_no_keys_changed_at(self):
+        # Add a user that has no keys_changed_at set
+        uid = self._add_user(generation=1234, keys_changed_at=None,
+                             client_state='aaaa')
+        headers = self._build_auth_headers(generation=1234,
+                                           keys_changed_at=1234,
+                                           client_state='aaaa')
+        # Send a request to set the keys_changed_at
+>       self.app.get('/1.0/sync/1.5', headers=headers)
+
+tools/integration_tests/tokenserver/test_authorization.py:521: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:328: in get
+    return self.do_request(req, status=status,
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:653: in do_request
+    self._check_status(status, res)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <webtest.app.TestApp object at 0x7fd1ec850400>, status = None
+res = <401 Unauthorized application/json body=b'{"status..."}]}'/102>
+
+    def _check_status(self, status, res):
+        if status == '*':
+            return
+        res_status = res.status
+        if (isinstance(status, str) and '*' in status):
+            if re.match(fnmatch.translate(status), res_status, re.I):
+                return
+        if isinstance(status, str):
+            if status == res_status:
+                return
+        if isinstance(status, (list, tuple)):
+            if res.status_int not in status:
+                raise AppError(
+                    "Bad response: %s (not one of %s for %s)\n%s",
+                    res_status, ', '.join(map(str, status)),
+                    res.request.url, res)
+            return
+        if status is None:
+            if res.status_int >= 200 and res.status_int < 400:
+                return
+>           raise AppError(
+                "Bad response: %s (not 200 OK or 3xx redirect for %s)\n%s",
+                res_status, res.request.url,
+                res)
+E           webtest.app.AppError: Bad response: 401 Unauthorized (not 200 OK or 3xx redirect for http://localhost:8000/1.0/sync/1.5)
+E           b'{"status":"invalid-credentials","errors":[{"location":"body","name":"","description":"Unauthorized"}]}'
+
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:682: AppError
+__________________ TestAuthorization.test_update_client_state __________________
+
+self = <tokenserver.test_authorization.TestAuthorization testMethod=test_update_client_state>
+
+    def test_update_client_state(self):
+        uid = self._add_user(generation=0, keys_changed_at=None,
+                             client_state='')
+        user1 = self._get_user(uid)
+        # The user starts out with no client_state
+        self.assertEqual(user1['generation'], 0)
+        self.assertEqual(user1['client_state'], '')
+        seen_uids = set((uid,))
+        orig_node = user1['nodeid']
+        # Changing client_state allocates a new user, resulting in a new uid
+        headers = self._build_auth_headers(generation=1234,
+                                           keys_changed_at=1234,
+                                           client_state='bbbb')
+>       res = self.app.get('/1.0/sync/1.5', headers=headers)
+
+tools/integration_tests/tokenserver/test_authorization.py:442: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:328: in get
+    return self.do_request(req, status=status,
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:653: in do_request
+    self._check_status(status, res)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <webtest.app.TestApp object at 0x7fd1ec7b9850>, status = None
+res = <401 Unauthorized application/json body=b'{"status..."}]}'/102>
+
+    def _check_status(self, status, res):
+        if status == '*':
+            return
+        res_status = res.status
+        if (isinstance(status, str) and '*' in status):
+            if re.match(fnmatch.translate(status), res_status, re.I):
+                return
+        if isinstance(status, str):
+            if status == res_status:
+                return
+        if isinstance(status, (list, tuple)):
+            if res.status_int not in status:
+                raise AppError(
+                    "Bad response: %s (not one of %s for %s)\n%s",
+                    res_status, ', '.join(map(str, status)),
+                    res.request.url, res)
+            return
+        if status is None:
+            if res.status_int >= 200 and res.status_int < 400:
+                return
+>           raise AppError(
+                "Bad response: %s (not 200 OK or 3xx redirect for %s)\n%s",
+                res_status, res.request.url,
+                res)
+E           webtest.app.AppError: Bad response: 401 Unauthorized (not 200 OK or 3xx redirect for http://localhost:8000/1.0/sync/1.5)
+E           b'{"status":"invalid-credentials","errors":[{"location":"body","name":"","description":"Unauthorized"}]}'
+
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:682: AppError
+_ TestAuthorization.test_x_client_state_must_have_same_client_state_as_key_id __
+
+self = <tokenserver.test_authorization.TestAuthorization testMethod=test_x_client_state_must_have_same_client_state_as_key_id>
+
+    def test_x_client_state_must_have_same_client_state_as_key_id(self):
+        self._add_user(client_state='aaaa')
+        additional_headers = {'X-Client-State': 'bbbb'}
+        headers = self._build_auth_headers(
+            generation=1234,
+            keys_changed_at=1234,
+            client_state='aaaa',
+            **additional_headers)
+        # If present, the X-Client-State header must have the same client
+        # state as the X-KeyID header
+        res = self.app.get('/1.0/sync/1.5', headers=headers, status=401)
+        expected_error_response = {
+            'errors': [
+                {
+                    'description': 'Unauthorized',
+                    'location': 'body',
+                    'name': ''
+                }
+            ],
+            'status': 'invalid-client-state'
+        }
+>       self.assertEqual(res.json, expected_error_response)
+E       AssertionError: {'status': 'invalid-credentials', 'errors':[62 chars]d'}]} != {'errors': [{'description': 'Unauthorized',[63 chars]ate'}
+E         {'errors': [{'description': 'Unauthorized', 'location': 'body', 'name': ''}],
+E       -  'status': 'invalid-credentials'}
+E       ?                      ^^^   ^ ^^
+E       
+E       +  'status': 'invalid-client-state'}
+E       ?                      ^^   ^^^ ^^
+
+tools/integration_tests/tokenserver/test_authorization.py:547: AssertionError
+____________ TestAuthorization.test_zero_generation_treated_as_null ____________
+
+self = <tokenserver.test_authorization.TestAuthorization testMethod=test_zero_generation_treated_as_null>
+
+    def test_zero_generation_treated_as_null(self):
+        # Add a user that has a generation set
+        uid = self._add_user(generation=1234, keys_changed_at=1234,
+                             client_state='aaaa')
+        headers = self._build_auth_headers(generation=0,
+                                           keys_changed_at=1234,
+                                           client_state='aaaa')
+        # Send a request with a generation of 0
+>       self.app.get('/1.0/sync/1.5', headers=headers)
+
+tools/integration_tests/tokenserver/test_authorization.py:559: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:328: in get
+    return self.do_request(req, status=status,
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:653: in do_request
+    self._check_status(status, res)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <webtest.app.TestApp object at 0x7fd1ec7e46a0>, status = None
+res = <401 Unauthorized application/json body=b'{"status..."}]}'/102>
+
+    def _check_status(self, status, res):
+        if status == '*':
+            return
+        res_status = res.status
+        if (isinstance(status, str) and '*' in status):
+            if re.match(fnmatch.translate(status), res_status, re.I):
+                return
+        if isinstance(status, str):
+            if status == res_status:
+                return
+        if isinstance(status, (list, tuple)):
+            if res.status_int not in status:
+                raise AppError(
+                    "Bad response: %s (not one of %s for %s)\n%s",
+                    res_status, ', '.join(map(str, status)),
+                    res.request.url, res)
+            return
+        if status is None:
+            if res.status_int >= 200 and res.status_int < 400:
+                return
+>           raise AppError(
+                "Bad response: %s (not 200 OK or 3xx redirect for %s)\n%s",
+                res_status, res.request.url,
+                res)
+E           webtest.app.AppError: Bad response: 401 Unauthorized (not 200 OK or 3xx redirect for http://localhost:8000/1.0/sync/1.5)
+E           b'{"status":"invalid-credentials","errors":[{"location":"body","name":"","description":"Unauthorized"}]}'
+
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:682: AppError
+_________ TestAuthorization.test_zero_keys_changed_at_treated_as_null __________
+
+self = <tokenserver.test_authorization.TestAuthorization testMethod=test_zero_keys_changed_at_treated_as_null>
+
+    def test_zero_keys_changed_at_treated_as_null(self):
+        # Add a user that has no keys_changed_at set
+        uid = self._add_user(generation=1234, keys_changed_at=None,
+                             client_state='aaaa')
+        headers = self._build_auth_headers(generation=1234,
+                                           keys_changed_at=0,
+                                           client_state='aaaa')
+        # Send a request with a keys_changed_at of 0
+>       self.app.get('/1.0/sync/1.5', headers=headers)
+
+tools/integration_tests/tokenserver/test_authorization.py:573: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:328: in get
+    return self.do_request(req, status=status,
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:653: in do_request
+    self._check_status(status, res)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <webtest.app.TestApp object at 0x7fd1ec91bd90>, status = None
+res = <401 Unauthorized application/json body=b'{"status..."}]}'/102>
+
+    def _check_status(self, status, res):
+        if status == '*':
+            return
+        res_status = res.status
+        if (isinstance(status, str) and '*' in status):
+            if re.match(fnmatch.translate(status), res_status, re.I):
+                return
+        if isinstance(status, str):
+            if status == res_status:
+                return
+        if isinstance(status, (list, tuple)):
+            if res.status_int not in status:
+                raise AppError(
+                    "Bad response: %s (not one of %s for %s)\n%s",
+                    res_status, ', '.join(map(str, status)),
+                    res.request.url, res)
+            return
+        if status is None:
+            if res.status_int >= 200 and res.status_int < 400:
+                return
+>           raise AppError(
+                "Bad response: %s (not 200 OK or 3xx redirect for %s)\n%s",
+                res_status, res.request.url,
+                res)
+E           webtest.app.AppError: Bad response: 401 Unauthorized (not 200 OK or 3xx redirect for http://localhost:8000/1.0/sync/1.5)
+E           b'{"status":"invalid-credentials","errors":[{"location":"body","name":"","description":"Unauthorized"}]}'
+
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:682: AppError
+_______________________ TestE2e.test_valid_oauth_request _______________________
+
+self = <tokenserver.test_e2e.TestE2e testMethod=test_valid_oauth_request>
+
+    def test_valid_oauth_request(self):
+        oauth_token = self.oauth_token
+        headers = {
+            'Authorization': 'Bearer %s' % oauth_token,
+            'X-KeyID': '1234-qqo'
+        }
+        # Send a valid request, allocating a new user
+>       res = self.app.get('/1.0/sync/1.5', headers=headers)
+
+tools/integration_tests/tokenserver/test_e2e.py:185: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:328: in get
+    return self.do_request(req, status=status,
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:653: in do_request
+    self._check_status(status, res)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <webtest.app.TestApp object at 0x7fd1ec1ed0d0>, status = None
+res = <401 Unauthorized application/json body=b'{"status..."}]}'/102>
+
+    def _check_status(self, status, res):
+        if status == '*':
+            return
+        res_status = res.status
+        if (isinstance(status, str) and '*' in status):
+            if re.match(fnmatch.translate(status), res_status, re.I):
+                return
+        if isinstance(status, str):
+            if status == res_status:
+                return
+        if isinstance(status, (list, tuple)):
+            if res.status_int not in status:
+                raise AppError(
+                    "Bad response: %s (not one of %s for %s)\n%s",
+                    res_status, ', '.join(map(str, status)),
+                    res.request.url, res)
+            return
+        if status is None:
+            if res.status_int >= 200 and res.status_int < 400:
+                return
+>           raise AppError(
+                "Bad response: %s (not 200 OK or 3xx redirect for %s)\n%s",
+                res_status, res.request.url,
+                res)
+E           webtest.app.AppError: Bad response: 401 Unauthorized (not 200 OK or 3xx redirect for http://localhost:8000/1.0/sync/1.5)
+E           b'{"status":"invalid-credentials","errors":[{"location":"body","name":"","description":"Unauthorized"}]}'
+
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:682: AppError
+______________ TestMisc.test_current_user_is_the_most_up_to_date _______________
+
+self = <tokenserver.test_misc.TestMisc testMethod=test_current_user_is_the_most_up_to_date>
+
+    def test_current_user_is_the_most_up_to_date(self):
+        # Add some users
+        self._add_user(generation=1234, created_at=1234)
+        self._add_user(generation=1235, created_at=1234)
+        self._add_user(generation=1234, created_at=1235)
+        uid = self._add_user(generation=1236, created_at=1233)
+        # Users are sorted by (generation, created_at), so the fourth user
+        # record is considered to be the current user
+        headers = self._build_auth_headers(generation=1236,
+                                           keys_changed_at=1234,
+                                           client_state='aaaa')
+>       res = self.app.get('/1.0/sync/1.5', headers=headers)
+
+tools/integration_tests/tokenserver/test_misc.py:75: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:328: in get
+    return self.do_request(req, status=status,
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:653: in do_request
+    self._check_status(status, res)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <webtest.app.TestApp object at 0x7fd1ec8bbd60>, status = None
+res = <401 Unauthorized application/json body=b'{"status..."}]}'/102>
+
+    def _check_status(self, status, res):
+        if status == '*':
+            return
+        res_status = res.status
+        if (isinstance(status, str) and '*' in status):
+            if re.match(fnmatch.translate(status), res_status, re.I):
+                return
+        if isinstance(status, str):
+            if status == res_status:
+                return
+        if isinstance(status, (list, tuple)):
+            if res.status_int not in status:
+                raise AppError(
+                    "Bad response: %s (not one of %s for %s)\n%s",
+                    res_status, ', '.join(map(str, status)),
+                    res.request.url, res)
+            return
+        if status is None:
+            if res.status_int >= 200 and res.status_int < 400:
+                return
+>           raise AppError(
+                "Bad response: %s (not 200 OK or 3xx redirect for %s)\n%s",
+                res_status, res.request.url,
+                res)
+E           webtest.app.AppError: Bad response: 401 Unauthorized (not 200 OK or 3xx redirect for http://localhost:8000/1.0/sync/1.5)
+E           b'{"status":"invalid-credentials","errors":[{"location":"body","name":"","description":"Unauthorized"}]}'
+
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:682: AppError
+_________ TestMisc.test_old_users_marked_as_replaced_in_race_recovery __________
+
+self = <tokenserver.test_misc.TestMisc testMethod=test_old_users_marked_as_replaced_in_race_recovery>
+
+    def test_old_users_marked_as_replaced_in_race_recovery(self):
+        # Add some users
+        uid1 = self._add_user(generation=1234, created_at=1234)
+        uid2 = self._add_user(generation=1235, created_at=1235)
+        uid3 = self._add_user(generation=1236, created_at=1240)
+        # Make a request
+        headers = self._build_auth_headers(generation=1236,
+                                           keys_changed_at=1236,
+                                           client_state='aaaa')
+>       res = self.app.get('/1.0/sync/1.5', headers=headers)
+
+tools/integration_tests/tokenserver/test_misc.py:102: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:328: in get
+    return self.do_request(req, status=status,
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:653: in do_request
+    self._check_status(status, res)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <webtest.app.TestApp object at 0x7fd1ec715fd0>, status = None
+res = <401 Unauthorized application/json body=b'{"status..."}]}'/102>
+
+    def _check_status(self, status, res):
+        if status == '*':
+            return
+        res_status = res.status
+        if (isinstance(status, str) and '*' in status):
+            if re.match(fnmatch.translate(status), res_status, re.I):
+                return
+        if isinstance(status, str):
+            if status == res_status:
+                return
+        if isinstance(status, (list, tuple)):
+            if res.status_int not in status:
+                raise AppError(
+                    "Bad response: %s (not one of %s for %s)\n%s",
+                    res_status, ', '.join(map(str, status)),
+                    res.request.url, res)
+            return
+        if status is None:
+            if res.status_int >= 200 and res.status_int < 400:
+                return
+>           raise AppError(
+                "Bad response: %s (not 200 OK or 3xx redirect for %s)\n%s",
+                res_status, res.request.url,
+                res)
+E           webtest.app.AppError: Bad response: 401 Unauthorized (not 200 OK or 3xx redirect for http://localhost:8000/1.0/sync/1.5)
+E           b'{"status":"invalid-credentials","errors":[{"location":"body","name":"","description":"Unauthorized"}]}'
+
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:682: AppError
+________________ TestMisc.test_replaced_users_can_make_requests ________________
+
+self = <tokenserver.test_misc.TestMisc testMethod=test_replaced_users_can_make_requests>
+
+    def test_replaced_users_can_make_requests(self):
+        # Add a replaced user to the database
+        self._add_user(generation=1234, created_at=1234, replaced_at=1234)
+        headers = self._build_auth_headers(generation=1234,
+                                           keys_changed_at=1234,
+                                           client_state='aaaa')
+        # Replaced users can make requests
+>       self.app.get('/1.0/sync/1.5', headers=headers)
+
+tools/integration_tests/tokenserver/test_misc.py:200: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:328: in get
+    return self.do_request(req, status=status,
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:653: in do_request
+    self._check_status(status, res)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <webtest.app.TestApp object at 0x7fd1ec570d30>, status = None
+res = <401 Unauthorized application/json body=b'{"status..."}]}'/102>
+
+    def _check_status(self, status, res):
+        if status == '*':
+            return
+        res_status = res.status
+        if (isinstance(status, str) and '*' in status):
+            if re.match(fnmatch.translate(status), res_status, re.I):
+                return
+        if isinstance(status, str):
+            if status == res_status:
+                return
+        if isinstance(status, (list, tuple)):
+            if res.status_int not in status:
+                raise AppError(
+                    "Bad response: %s (not one of %s for %s)\n%s",
+                    res_status, ', '.join(map(str, status)),
+                    res.request.url, res)
+            return
+        if status is None:
+            if res.status_int >= 200 and res.status_int < 400:
+                return
+>           raise AppError(
+                "Bad response: %s (not 200 OK or 3xx redirect for %s)\n%s",
+                res_status, res.request.url,
+                res)
+E           webtest.app.AppError: Bad response: 401 Unauthorized (not 200 OK or 3xx redirect for http://localhost:8000/1.0/sync/1.5)
+E           b'{"status":"invalid-credentials","errors":[{"location":"body","name":"","description":"Unauthorized"}]}'
+
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:682: AppError
+_________ TestMisc.test_replaced_users_with_no_node_can_make_requests __________
+
+self = <tokenserver.test_misc.TestMisc testMethod=test_replaced_users_with_no_node_can_make_requests>
+
+    def test_replaced_users_with_no_node_can_make_requests(self):
+        # Add a replaced user to the database
+        invalid_node_id = self.NODE_ID + 1
+        self._add_user(created_at=1234, replaced_at=1234,
+                       nodeid=invalid_node_id)
+        headers = self._build_auth_headers(generation=1234,
+                                           keys_changed_at=1234,
+                                           client_state='aaaa')
+        # Replaced users without a node can make requests
+>       res = self.app.get('/1.0/sync/1.5', headers=headers)
+
+tools/integration_tests/tokenserver/test_misc.py:221: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:328: in get
+    return self.do_request(req, status=status,
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:653: in do_request
+    self._check_status(status, res)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <webtest.app.TestApp object at 0x7fd1ec442490>, status = None
+res = <401 Unauthorized application/json body=b'{"status..."}]}'/102>
+
+    def _check_status(self, status, res):
+        if status == '*':
+            return
+        res_status = res.status
+        if (isinstance(status, str) and '*' in status):
+            if re.match(fnmatch.translate(status), res_status, re.I):
+                return
+        if isinstance(status, str):
+            if status == res_status:
+                return
+        if isinstance(status, (list, tuple)):
+            if res.status_int not in status:
+                raise AppError(
+                    "Bad response: %s (not one of %s for %s)\n%s",
+                    res_status, ', '.join(map(str, status)),
+                    res.request.url, res)
+            return
+        if status is None:
+            if res.status_int >= 200 and res.status_int < 400:
+                return
+>           raise AppError(
+                "Bad response: %s (not 200 OK or 3xx redirect for %s)\n%s",
+                res_status, res.request.url,
+                res)
+E           webtest.app.AppError: Bad response: 401 Unauthorized (not 200 OK or 3xx redirect for http://localhost:8000/1.0/sync/1.5)
+E           b'{"status":"invalid-credentials","errors":[{"location":"body","name":"","description":"Unauthorized"}]}'
+
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:682: AppError
+________________ TestMisc.test_retired_users_can_make_requests _________________
+
+self = <tokenserver.test_misc.TestMisc testMethod=test_retired_users_can_make_requests>
+
+    def test_retired_users_can_make_requests(self):
+        # Add a retired user to the database
+        self._add_user(generation=MAX_GENERATION)
+        headers = self._build_auth_headers(generation=1235,
+                                           keys_changed_at=1234,
+                                           client_state='aaaa')
+        # Retired users cannot make requests with a generation smaller than
+        # the max generation
+        res = self.app.get('/1.0/sync/1.5', headers=headers, status=401)
+        expected_error_response = {
+            "status": "invalid-generation",
+            "errors": [
+                {
+                    "location": "body",
+                    "name": "",
+                    "description": "Unauthorized"
+                }
+            ]
+        }
+>       self.assertEqual(res.json, expected_error_response)
+E       AssertionError: {'status': 'invalid-credentials', 'errors': [{'location': 'bo[44 chars]d'}]} != {'status': 'invalid-generation', 'errors': [{'location': 'bod[43 chars]d'}]}
+E         {'errors': [{'description': 'Unauthorized', 'location': 'body', 'name': ''}],
+E       -  'status': 'invalid-credentials'}
+E       ?                     ^^^^    ^^^
+E       
+E       +  'status': 'invalid-generation'}
+E       ?                     ^  +++  ^^
+
+tools/integration_tests/tokenserver/test_misc.py:185: AssertionError
+________ TestMisc.test_retired_users_with_no_node_cannot_make_requests _________
+
+self = <tokenserver.test_misc.TestMisc testMethod=test_retired_users_with_no_node_cannot_make_requests>
+
+    def test_retired_users_with_no_node_cannot_make_requests(self):
+        # Add a retired user to the database
+        invalid_node_id = self.NODE_ID + 1
+        self._add_user(generation=MAX_GENERATION, nodeid=invalid_node_id)
+        # Retired users without a node cannot make requests
+        headers = self._build_auth_headers(generation=MAX_GENERATION,
+                                           keys_changed_at=1234,
+                                           client_state='aaaa')
+>       self.app.get('/1.0/sync/1.5', headers=headers, status=500)
+
+tools/integration_tests/tokenserver/test_misc.py:210: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:328: in get
+    return self.do_request(req, status=status,
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:653: in do_request
+    self._check_status(status, res)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <webtest.app.TestApp object at 0x7fd1ec0fa8b0>, status = 500
+res = <401 Unauthorized application/json body=b'{"status..."}]}'/102>
+
+    def _check_status(self, status, res):
+        if status == '*':
+            return
+        res_status = res.status
+        if (isinstance(status, str) and '*' in status):
+            if re.match(fnmatch.translate(status), res_status, re.I):
+                return
+        if isinstance(status, str):
+            if status == res_status:
+                return
+        if isinstance(status, (list, tuple)):
+            if res.status_int not in status:
+                raise AppError(
+                    "Bad response: %s (not one of %s for %s)\n%s",
+                    res_status, ', '.join(map(str, status)),
+                    res.request.url, res)
+            return
+        if status is None:
+            if res.status_int >= 200 and res.status_int < 400:
+                return
+            raise AppError(
+                "Bad response: %s (not 200 OK or 3xx redirect for %s)\n%s",
+                res_status, res.request.url,
+                res)
+        if status != res.status_int:
+>           raise AppError(
+                "Bad response: %s (not %s)\n%s", res_status, status, res)
+E           webtest.app.AppError: Bad response: 401 Unauthorized (not 500)
+E           b'{"status":"invalid-credentials","errors":[{"location":"body","name":"","description":"Unauthorized"}]}'
+
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:687: AppError
+__________________________ TestMisc.test_unknown_app ___________________________
+
+self = <tokenserver.test_misc.TestMisc testMethod=test_unknown_app>
+
+    def test_unknown_app(self):
+        headers = self._build_auth_headers(generation=1234,
+                                           keys_changed_at=1234,
+                                           client_state='aaaa')
+>       res = self.app.get('/1.0/xXx/token', headers=headers, status=404)
+
+tools/integration_tests/tokenserver/test_misc.py:24: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:328: in get
+    return self.do_request(req, status=status,
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:653: in do_request
+    self._check_status(status, res)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <webtest.app.TestApp object at 0x7fd1ec741730>, status = 404
+res = <401 Unauthorized application/json body=b'{"status..."}]}'/102>
+
+    def _check_status(self, status, res):
+        if status == '*':
+            return
+        res_status = res.status
+        if (isinstance(status, str) and '*' in status):
+            if re.match(fnmatch.translate(status), res_status, re.I):
+                return
+        if isinstance(status, str):
+            if status == res_status:
+                return
+        if isinstance(status, (list, tuple)):
+            if res.status_int not in status:
+                raise AppError(
+                    "Bad response: %s (not one of %s for %s)\n%s",
+                    res_status, ', '.join(map(str, status)),
+                    res.request.url, res)
+            return
+        if status is None:
+            if res.status_int >= 200 and res.status_int < 400:
+                return
+            raise AppError(
+                "Bad response: %s (not 200 OK or 3xx redirect for %s)\n%s",
+                res_status, res.request.url,
+                res)
+        if status != res.status_int:
+>           raise AppError(
+                "Bad response: %s (not %s)\n%s", res_status, status, res)
+E           webtest.app.AppError: Bad response: 401 Unauthorized (not 404)
+E           b'{"status":"invalid-credentials","errors":[{"location":"body","name":"","description":"Unauthorized"}]}'
+
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:687: AppError
+________________________ TestMisc.test_unknown_version _________________________
+
+self = <tokenserver.test_misc.TestMisc testMethod=test_unknown_version>
+
+    def test_unknown_version(self):
+        headers = self._build_auth_headers(generation=1234,
+                                           keys_changed_at=1234,
+                                           client_state='aaaa')
+>       res = self.app.get('/1.0/sync/1.2', headers=headers, status=404)
+
+tools/integration_tests/tokenserver/test_misc.py:41: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:328: in get
+    return self.do_request(req, status=status,
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:653: in do_request
+    self._check_status(status, res)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <webtest.app.TestApp object at 0x7fd1ec2c9640>, status = 404
+res = <401 Unauthorized application/json body=b'{"status..."}]}'/102>
+
+    def _check_status(self, status, res):
+        if status == '*':
+            return
+        res_status = res.status
+        if (isinstance(status, str) and '*' in status):
+            if re.match(fnmatch.translate(status), res_status, re.I):
+                return
+        if isinstance(status, str):
+            if status == res_status:
+                return
+        if isinstance(status, (list, tuple)):
+            if res.status_int not in status:
+                raise AppError(
+                    "Bad response: %s (not one of %s for %s)\n%s",
+                    res_status, ', '.join(map(str, status)),
+                    res.request.url, res)
+            return
+        if status is None:
+            if res.status_int >= 200 and res.status_int < 400:
+                return
+            raise AppError(
+                "Bad response: %s (not 200 OK or 3xx redirect for %s)\n%s",
+                res_status, res.request.url,
+                res)
+        if status != res.status_int:
+>           raise AppError(
+                "Bad response: %s (not %s)\n%s", res_status, status, res)
+E           webtest.app.AppError: Bad response: 401 Unauthorized (not 404)
+E           b'{"status":"invalid-credentials","errors":[{"location":"body","name":"","description":"Unauthorized"}]}'
+
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:687: AppError
+________ TestMisc.test_user_creation_when_most_current_user_is_replaced ________
+
+self = <tokenserver.test_misc.TestMisc testMethod=test_user_creation_when_most_current_user_is_replaced>
+
+    def test_user_creation_when_most_current_user_is_replaced(self):
+        # Add some users
+        uid1 = self._add_user(generation=1234, created_at=1234)
+        uid2 = self._add_user(generation=1235, created_at=1235)
+        uid3 = self._add_user(generation=1236, created_at=1236,
+                              replaced_at=1237)
+        seen_uids = [uid1, uid2, uid3]
+        # Because the current user (the one with uid3) has been replaced, a new
+        # user record is created
+        headers = self._build_auth_headers(generation=1237,
+                                           keys_changed_at=1237,
+                                           client_state='aaaa')
+>       res = self.app.get('/1.0/sync/1.5', headers=headers)
+
+tools/integration_tests/tokenserver/test_misc.py:90: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:328: in get
+    return self.do_request(req, status=status,
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:653: in do_request
+    self._check_status(status, res)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <webtest.app.TestApp object at 0x7fd1ec137130>, status = None
+res = <401 Unauthorized application/json body=b'{"status..."}]}'/102>
+
+    def _check_status(self, status, res):
+        if status == '*':
+            return
+        res_status = res.status
+        if (isinstance(status, str) and '*' in status):
+            if re.match(fnmatch.translate(status), res_status, re.I):
+                return
+        if isinstance(status, str):
+            if status == res_status:
+                return
+        if isinstance(status, (list, tuple)):
+            if res.status_int not in status:
+                raise AppError(
+                    "Bad response: %s (not one of %s for %s)\n%s",
+                    res_status, ', '.join(map(str, status)),
+                    res.request.url, res)
+            return
+        if status is None:
+            if res.status_int >= 200 and res.status_int < 400:
+                return
+>           raise AppError(
+                "Bad response: %s (not 200 OK or 3xx redirect for %s)\n%s",
+                res_status, res.request.url,
+                res)
+E           webtest.app.AppError: Bad response: 401 Unauthorized (not 200 OK or 3xx redirect for http://localhost:8000/1.0/sync/1.5)
+E           b'{"status":"invalid-credentials","errors":[{"location":"body","name":"","description":"Unauthorized"}]}'
+
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:682: AppError
+_______________ TestMisc.test_user_updates_with_new_client_state _______________
+
+self = <tokenserver.test_misc.TestMisc testMethod=test_user_updates_with_new_client_state>
+
+    def test_user_updates_with_new_client_state(self):
+        # Start with a single user in the database
+        uid = self._add_user(generation=1234, keys_changed_at=1234,
+                             client_state='aaaa')
+        # Send a request, updating the generation, keys_changed_at, and
+        # client_state
+        headers = self._build_auth_headers(generation=1235,
+                                           keys_changed_at=1235,
+                                           client_state='bbbb')
+>       res = self.app.get('/1.0/sync/1.5', headers=headers)
+
+tools/integration_tests/tokenserver/test_misc.py:121: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:328: in get
+    return self.do_request(req, status=status,
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:653: in do_request
+    self._check_status(status, res)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <webtest.app.TestApp object at 0x7fd1ec570460>, status = None
+res = <401 Unauthorized application/json body=b'{"status..."}]}'/102>
+
+    def _check_status(self, status, res):
+        if status == '*':
+            return
+        res_status = res.status
+        if (isinstance(status, str) and '*' in status):
+            if re.match(fnmatch.translate(status), res_status, re.I):
+                return
+        if isinstance(status, str):
+            if status == res_status:
+                return
+        if isinstance(status, (list, tuple)):
+            if res.status_int not in status:
+                raise AppError(
+                    "Bad response: %s (not one of %s for %s)\n%s",
+                    res_status, ', '.join(map(str, status)),
+                    res.request.url, res)
+            return
+        if status is None:
+            if res.status_int >= 200 and res.status_int < 400:
+                return
+>           raise AppError(
+                "Bad response: %s (not 200 OK or 3xx redirect for %s)\n%s",
+                res_status, res.request.url,
+                res)
+E           webtest.app.AppError: Bad response: 401 Unauthorized (not 200 OK or 3xx redirect for http://localhost:8000/1.0/sync/1.5)
+E           b'{"status":"invalid-credentials","errors":[{"location":"body","name":"","description":"Unauthorized"}]}'
+
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:682: AppError
+______________ TestMisc.test_user_updates_with_same_client_state _______________
+
+self = <tokenserver.test_misc.TestMisc testMethod=test_user_updates_with_same_client_state>
+
+    def test_user_updates_with_same_client_state(self):
+        # Start with a single user in the database
+        uid = self._add_user(generation=1234, keys_changed_at=1234)
+        # Send a request, updating the generation and keys_changed_at but not
+        # the client state
+        headers = self._build_auth_headers(generation=1235,
+                                           keys_changed_at=1235,
+                                           client_state='aaaa')
+>       res = self.app.get('/1.0/sync/1.5', headers=headers)
+
+tools/integration_tests/tokenserver/test_misc.py:157: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:328: in get
+    return self.do_request(req, status=status,
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:653: in do_request
+    self._check_status(status, res)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <webtest.app.TestApp object at 0x7fd1ec616e80>, status = None
+res = <401 Unauthorized application/json body=b'{"status..."}]}'/102>
+
+    def _check_status(self, status, res):
+        if status == '*':
+            return
+        res_status = res.status
+        if (isinstance(status, str) and '*' in status):
+            if re.match(fnmatch.translate(status), res_status, re.I):
+                return
+        if isinstance(status, str):
+            if status == res_status:
+                return
+        if isinstance(status, (list, tuple)):
+            if res.status_int not in status:
+                raise AppError(
+                    "Bad response: %s (not one of %s for %s)\n%s",
+                    res_status, ', '.join(map(str, status)),
+                    res.request.url, res)
+            return
+        if status is None:
+            if res.status_int >= 200 and res.status_int < 400:
+                return
+>           raise AppError(
+                "Bad response: %s (not 200 OK or 3xx redirect for %s)\n%s",
+                res_status, res.request.url,
+                res)
+E           webtest.app.AppError: Bad response: 401 Unauthorized (not 200 OK or 3xx redirect for http://localhost:8000/1.0/sync/1.5)
+E           b'{"status":"invalid-credentials","errors":[{"location":"body","name":"","description":"Unauthorized"}]}'
+
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:682: AppError
+___________________________ TestMisc.test_valid_app ____________________________
+
+self = <tokenserver.test_misc.TestMisc testMethod=test_valid_app>
+
+    def test_valid_app(self):
+        self._add_user()
+        headers = self._build_auth_headers(generation=1234,
+                                           keys_changed_at=1234,
+                                           client_state='aaaa')
+>       res = self.app.get('/1.0/sync/1.5', headers=headers)
+
+tools/integration_tests/tokenserver/test_misc.py:59: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:328: in get
+    return self.do_request(req, status=status,
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:653: in do_request
+    self._check_status(status, res)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <webtest.app.TestApp object at 0x7fd1ec1a0340>, status = None
+res = <401 Unauthorized application/json body=b'{"status..."}]}'/102>
+
+    def _check_status(self, status, res):
+        if status == '*':
+            return
+        res_status = res.status
+        if (isinstance(status, str) and '*' in status):
+            if re.match(fnmatch.translate(status), res_status, re.I):
+                return
+        if isinstance(status, str):
+            if status == res_status:
+                return
+        if isinstance(status, (list, tuple)):
+            if res.status_int not in status:
+                raise AppError(
+                    "Bad response: %s (not one of %s for %s)\n%s",
+                    res_status, ', '.join(map(str, status)),
+                    res.request.url, res)
+            return
+        if status is None:
+            if res.status_int >= 200 and res.status_int < 400:
+                return
+>           raise AppError(
+                "Bad response: %s (not 200 OK or 3xx redirect for %s)\n%s",
+                res_status, res.request.url,
+                res)
+E           webtest.app.AppError: Bad response: 401 Unauthorized (not 200 OK or 3xx redirect for http://localhost:8000/1.0/sync/1.5)
+E           b'{"status":"invalid-credentials","errors":[{"location":"body","name":"","description":"Unauthorized"}]}'
+
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:682: AppError
+_____________________ TestMisc.test_x_content_type_options _____________________
+
+self = <tokenserver.test_misc.TestMisc testMethod=test_x_content_type_options>
+
+    def test_x_content_type_options(self):
+        self._add_user(generation=1234,
+                       keys_changed_at=1234,
+                       client_state='aaaa')
+        headers = self._build_auth_headers(generation=1234,
+                                           keys_changed_at=1234,
+                                           client_state='aaaa')
+>       res = self.app.get('/1.0/sync/1.5', headers=headers)
+
+tools/integration_tests/tokenserver/test_misc.py:233: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:328: in get
+    return self.do_request(req, status=status,
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:653: in do_request
+    self._check_status(status, res)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <webtest.app.TestApp object at 0x7fd1ec39fca0>, status = None
+res = <401 Unauthorized application/json body=b'{"status..."}]}'/102>
+
+    def _check_status(self, status, res):
+        if status == '*':
+            return
+        res_status = res.status
+        if (isinstance(status, str) and '*' in status):
+            if re.match(fnmatch.translate(status), res_status, re.I):
+                return
+        if isinstance(status, str):
+            if status == res_status:
+                return
+        if isinstance(status, (list, tuple)):
+            if res.status_int not in status:
+                raise AppError(
+                    "Bad response: %s (not one of %s for %s)\n%s",
+                    res_status, ', '.join(map(str, status)),
+                    res.request.url, res)
+            return
+        if status is None:
+            if res.status_int >= 200 and res.status_int < 400:
+                return
+>           raise AppError(
+                "Bad response: %s (not 200 OK or 3xx redirect for %s)\n%s",
+                res_status, res.request.url,
+                res)
+E           webtest.app.AppError: Bad response: 401 Unauthorized (not 200 OK or 3xx redirect for http://localhost:8000/1.0/sync/1.5)
+E           b'{"status":"invalid-credentials","errors":[{"location":"body","name":"","description":"Unauthorized"}]}'
+
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:682: AppError
+_________________ TestNodeAssignment.test_new_user_allocation __________________
+
+self = <tokenserver.test_node_assignment.TestNodeAssignment testMethod=test_new_user_allocation>
+
+    def test_new_user_allocation(self):
+        # Start with a clean database
+        cursor = self._execute_sql('DELETE FROM nodes', ())
+        cursor.close()
+    
+        self._add_node(available=100, current_load=0, capacity=100, backoff=1,
+                       node='https://node1')
+        self._add_node(available=100, current_load=0, capacity=100, downed=1,
+                       node='https://node2')
+        node_id = self._add_node(available=99, current_load=1, capacity=100,
+                                 node='https://node3')
+        self._add_node(available=98, current_load=2, capacity=100,
+                       node='https://node4')
+        self._add_node(available=97, current_load=3, capacity=100,
+                       node='https://node5')
+        headers = self._build_auth_headers(generation=1234,
+                                           keys_changed_at=1234,
+                                           client_state='aaaa')
+>       res = self.app.get('/1.0/sync/1.5', headers=headers)
+
+tools/integration_tests/tokenserver/test_node_assignment.py:65: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:328: in get
+    return self.do_request(req, status=status,
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:653: in do_request
+    self._check_status(status, res)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <webtest.app.TestApp object at 0x7fd1ec334760>, status = None
+res = <401 Unauthorized application/json body=b'{"status..."}]}'/102>
+
+    def _check_status(self, status, res):
+        if status == '*':
+            return
+        res_status = res.status
+        if (isinstance(status, str) and '*' in status):
+            if re.match(fnmatch.translate(status), res_status, re.I):
+                return
+        if isinstance(status, str):
+            if status == res_status:
+                return
+        if isinstance(status, (list, tuple)):
+            if res.status_int not in status:
+                raise AppError(
+                    "Bad response: %s (not one of %s for %s)\n%s",
+                    res_status, ', '.join(map(str, status)),
+                    res.request.url, res)
+            return
+        if status is None:
+            if res.status_int >= 200 and res.status_int < 400:
+                return
+>           raise AppError(
+                "Bad response: %s (not 200 OK or 3xx redirect for %s)\n%s",
+                res_status, res.request.url,
+                res)
+E           webtest.app.AppError: Bad response: 401 Unauthorized (not 200 OK or 3xx redirect for http://localhost:8000/1.0/sync/1.5)
+E           b'{"status":"invalid-credentials","errors":[{"location":"body","name":"","description":"Unauthorized"}]}'
+
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:682: AppError
+_________ TestNodeAssignment.test_successfully_releasing_node_capacity _________
+
+self = <tokenserver.test_node_assignment.TestNodeAssignment testMethod=test_successfully_releasing_node_capacity>
+
+    def test_successfully_releasing_node_capacity(self):
+        # Start with a clean database
+        cursor = self._execute_sql('DELETE FROM nodes', ())
+        cursor.close()
+    
+        node_id1 = self._add_node(available=0, current_load=99, capacity=100,
+                                  node='https://node1')
+        node_id2 = self._add_node(available=0, current_load=90, capacity=100,
+                                  node='https://node2')
+        node_id3 = self._add_node(available=0, current_load=80, capacity=81,
+                                  node='https://node3')
+        node_id4 = self._add_node(available=0, current_load=70, capacity=71,
+                                  node='https://node4', backoff=1)
+        node_id5 = self._add_node(available=0, current_load=60, capacity=61,
+                                  node='https://node5', downed=1)
+        headers = self._build_auth_headers(generation=1234,
+                                           keys_changed_at=1234,
+                                           client_state='aaaa')
+>       res = self.app.get('/1.0/sync/1.5', headers=headers)
+
+tools/integration_tests/tokenserver/test_node_assignment.py:95: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:328: in get
+    return self.do_request(req, status=status,
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:653: in do_request
+    self._check_status(status, res)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <webtest.app.TestApp object at 0x7fd1ec5b9fd0>, status = None
+res = <401 Unauthorized application/json body=b'{"status..."}]}'/102>
+
+    def _check_status(self, status, res):
+        if status == '*':
+            return
+        res_status = res.status
+        if (isinstance(status, str) and '*' in status):
+            if re.match(fnmatch.translate(status), res_status, re.I):
+                return
+        if isinstance(status, str):
+            if status == res_status:
+                return
+        if isinstance(status, (list, tuple)):
+            if res.status_int not in status:
+                raise AppError(
+                    "Bad response: %s (not one of %s for %s)\n%s",
+                    res_status, ', '.join(map(str, status)),
+                    res.request.url, res)
+            return
+        if status is None:
+            if res.status_int >= 200 and res.status_int < 400:
+                return
+>           raise AppError(
+                "Bad response: %s (not 200 OK or 3xx redirect for %s)\n%s",
+                res_status, res.request.url,
+                res)
+E           webtest.app.AppError: Bad response: 401 Unauthorized (not 200 OK or 3xx redirect for http://localhost:8000/1.0/sync/1.5)
+E           b'{"status":"invalid-credentials","errors":[{"location":"body","name":"","description":"Unauthorized"}]}'
+
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:682: AppError
+________ TestNodeAssignment.test_unsuccessfully_releasing_node_capacity ________
+
+self = <tokenserver.test_node_assignment.TestNodeAssignment testMethod=test_unsuccessfully_releasing_node_capacity>
+
+    def test_unsuccessfully_releasing_node_capacity(self):
+        # Start with a clean database
+        cursor = self._execute_sql('DELETE FROM nodes', ())
+        cursor.close()
+    
+        self._add_node(available=0, current_load=100, capacity=100,
+                       node='https://node1')
+        self._add_node(available=0, current_load=90, capacity=90,
+                       node='https://node2')
+        self._add_node(available=0, current_load=80, capacity=80,
+                       node='https://node3')
+        headers = self._build_auth_headers(generation=1234,
+                                           keys_changed_at=1234,
+                                           client_state='aaaa')
+        # All of these nodes are completely full, and no capacity can be
+        # released
+>       res = self.app.get('/1.0/sync/1.5', headers=headers, status=503)
+
+tools/integration_tests/tokenserver/test_node_assignment.py:136: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:328: in get
+    return self.do_request(req, status=status,
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:653: in do_request
+    self._check_status(status, res)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <webtest.app.TestApp object at 0x7fd1ec40d5e0>, status = 503
+res = <401 Unauthorized application/json body=b'{"status..."}]}'/102>
+
+    def _check_status(self, status, res):
+        if status == '*':
+            return
+        res_status = res.status
+        if (isinstance(status, str) and '*' in status):
+            if re.match(fnmatch.translate(status), res_status, re.I):
+                return
+        if isinstance(status, str):
+            if status == res_status:
+                return
+        if isinstance(status, (list, tuple)):
+            if res.status_int not in status:
+                raise AppError(
+                    "Bad response: %s (not one of %s for %s)\n%s",
+                    res_status, ', '.join(map(str, status)),
+                    res.request.url, res)
+            return
+        if status is None:
+            if res.status_int >= 200 and res.status_int < 400:
+                return
+            raise AppError(
+                "Bad response: %s (not 200 OK or 3xx redirect for %s)\n%s",
+                res_status, res.request.url,
+                res)
+        if status != res.status_int:
+>           raise AppError(
+                "Bad response: %s (not %s)\n%s", res_status, status, res)
+E           webtest.app.AppError: Bad response: 401 Unauthorized (not 503)
+E           b'{"status":"invalid-credentials","errors":[{"location":"body","name":"","description":"Unauthorized"}]}'
+
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:687: AppError
+____________________ TestNodeAssignment.test_user_creation _____________________
+
+self = <tokenserver.test_node_assignment.TestNodeAssignment testMethod=test_user_creation>
+
+    def test_user_creation(self):
+        # Add a few more nodes
+        self._add_node(available=0, node='https://node1')
+        self._add_node(available=1, node='https://node2')
+        self._add_node(available=5, node='https://node3')
+        # Send a request from an unseen user
+        headers = self._build_auth_headers(generation=1234,
+                                           keys_changed_at=1234,
+                                           client_state='aaaa')
+>       res = self.app.get('/1.0/sync/1.5', headers=headers)
+
+tools/integration_tests/tokenserver/test_node_assignment.py:27: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:328: in get
+    return self.do_request(req, status=status,
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:653: in do_request
+    self._check_status(status, res)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <webtest.app.TestApp object at 0x7fd1ec7fa250>, status = None
+res = <401 Unauthorized application/json body=b'{"status..."}]}'/102>
+
+    def _check_status(self, status, res):
+        if status == '*':
+            return
+        res_status = res.status
+        if (isinstance(status, str) and '*' in status):
+            if re.match(fnmatch.translate(status), res_status, re.I):
+                return
+        if isinstance(status, str):
+            if status == res_status:
+                return
+        if isinstance(status, (list, tuple)):
+            if res.status_int not in status:
+                raise AppError(
+                    "Bad response: %s (not one of %s for %s)\n%s",
+                    res_status, ', '.join(map(str, status)),
+                    res.request.url, res)
+            return
+        if status is None:
+            if res.status_int >= 200 and res.status_int < 400:
+                return
+>           raise AppError(
+                "Bad response: %s (not 200 OK or 3xx redirect for %s)\n%s",
+                res_status, res.request.url,
+                res)
+E           webtest.app.AppError: Bad response: 401 Unauthorized (not 200 OK or 3xx redirect for http://localhost:8000/1.0/sync/1.5)
+E           b'{"status":"invalid-credentials","errors":[{"location":"body","name":"","description":"Unauthorized"}]}'
+
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:682: AppError
+=============================== warnings summary ===============================
+../usr/local/lib/python3.9/dist-packages/pyramid_hawkauth/__init__.py:26
+  /usr/local/lib/python3.9/dist-packages/pyramid_hawkauth/__init__.py:26: DeprecationWarning: Everyone: "pyramid.security.Everyone" is deprecated in Pyramid 2.0. Adjust your import to "pyramid.authorization.Everyone"
+    from pyramid.security import Everyone, Authenticated
+
+../usr/local/lib/python3.9/dist-packages/pyramid_hawkauth/__init__.py:26
+  /usr/local/lib/python3.9/dist-packages/pyramid_hawkauth/__init__.py:26: DeprecationWarning: Authenticated: "pyramid.security.Authenticated" is deprecated in Pyramid 2.0. Adjust your import to "pyramid.authorization.Authenticated"
+    from pyramid.security import Everyone, Authenticated
+
+tools/integration_tests/test_storage.py: 63 warnings
+  /app/tools/integration_tests/test_support.py:182: DeprecationWarning: Authentication and authorization policies have been deprecated in favor of security policies.  See "Upgrading Authentication/Authorization" in "What's New in Pyramid 2.0" of the documentation for more information.
+    config.set_authorization_policy(authz_policy)
+
+tools/integration_tests/test_storage.py: 63 warnings
+  /app/tools/integration_tests/test_support.py:186: DeprecationWarning: Authentication and authorization policies have been deprecated in favor of security policies.  See "Upgrading Authentication/Authorization" in "What's New in Pyramid 2.0" of the documentation for more information.
+    config.set_authentication_policy(authn_policy)
+
+tools/integration_tests/tokenserver/test_authorization.py::TestAuthorization::test_client_specified_duration
+  /app/tools/integration_tests/tokenserver/test_support.py:292: RemovedIn20Warning: Deprecated API features detected! These feature(s) are not compatible with SQLAlchemy 2.0. To prevent incompatible upgrades prior to updating applications, ensure requirements files are pinned to "sqlalchemy<2.0". Set environment variable SQLALCHEMY_WARN_20=1 to show all deprecation warnings.  Set environment variable SQLALCHEMY_SILENCE_UBER_WARNING=1 to silence this message. (Background on SQLAlchemy 2.0 at: https://sqlalche.me/e/b8d9)
+    cursor = self.database.execute(query, args)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+-------------- generated xml file: /mysql_integration_results.xml --------------
+=========================== short test summary info ============================
+FAILED tools/integration_tests/tokenserver/test_authorization.py::TestAuthorization::test_client_specified_duration
+FAILED tools/integration_tests/tokenserver/test_authorization.py::TestAuthorization::test_disallow_reusing_old_client_state
+FAILED tools/integration_tests/tokenserver/test_authorization.py::TestAuthorization::test_fxa_kid_change
+FAILED tools/integration_tests/tokenserver/test_authorization.py::TestAuthorization::test_generation_change_must_accompany_client_state_change
+FAILED tools/integration_tests/tokenserver/test_authorization.py::TestAuthorization::test_generation_must_not_be_less_than_last_seen_value
+FAILED tools/integration_tests/tokenserver/test_authorization.py::TestAuthorization::test_invalid_client_state_in_x_client_state
+FAILED tools/integration_tests/tokenserver/test_authorization.py::TestAuthorization::test_keys_changed_at_change_must_accompany_client_state_change
+FAILED tools/integration_tests/tokenserver/test_authorization.py::TestAuthorization::test_keys_changed_at_less_than_equal_to_generation
+FAILED tools/integration_tests/tokenserver/test_authorization.py::TestAuthorization::test_kid_change_during_gradual_tokenserver_rollout
+FAILED tools/integration_tests/tokenserver/test_authorization.py::TestAuthorization::test_set_generation_from_no_generation
+FAILED tools/integration_tests/tokenserver/test_authorization.py::TestAuthorization::test_set_generation_unchanged_without_keys_changed_at_update
+FAILED tools/integration_tests/tokenserver/test_authorization.py::TestAuthorization::test_set_generation_with_keys_changed_at_initialization
+FAILED tools/integration_tests/tokenserver/test_authorization.py::TestAuthorization::test_set_keys_changed_at_from_no_keys_changed_at
+FAILED tools/integration_tests/tokenserver/test_authorization.py::TestAuthorization::test_update_client_state
+FAILED tools/integration_tests/tokenserver/test_authorization.py::TestAuthorization::test_x_client_state_must_have_same_client_state_as_key_id
+FAILED tools/integration_tests/tokenserver/test_authorization.py::TestAuthorization::test_zero_generation_treated_as_null
+FAILED tools/integration_tests/tokenserver/test_authorization.py::TestAuthorization::test_zero_keys_changed_at_treated_as_null
+FAILED tools/integration_tests/tokenserver/test_e2e.py::TestE2e::test_valid_oauth_request
+FAILED tools/integration_tests/tokenserver/test_misc.py::TestMisc::test_current_user_is_the_most_up_to_date
+FAILED tools/integration_tests/tokenserver/test_misc.py::TestMisc::test_old_users_marked_as_replaced_in_race_recovery
+FAILED tools/integration_tests/tokenserver/test_misc.py::TestMisc::test_replaced_users_can_make_requests
+FAILED tools/integration_tests/tokenserver/test_misc.py::TestMisc::test_replaced_users_with_no_node_can_make_requests
+FAILED tools/integration_tests/tokenserver/test_misc.py::TestMisc::test_retired_users_can_make_requests
+FAILED tools/integration_tests/tokenserver/test_misc.py::TestMisc::test_retired_users_with_no_node_cannot_make_requests
+FAILED tools/integration_tests/tokenserver/test_misc.py::TestMisc::test_unknown_app
+FAILED tools/integration_tests/tokenserver/test_misc.py::TestMisc::test_unknown_version
+FAILED tools/integration_tests/tokenserver/test_misc.py::TestMisc::test_user_creation_when_most_current_user_is_replaced
+FAILED tools/integration_tests/tokenserver/test_misc.py::TestMisc::test_user_updates_with_new_client_state
+FAILED tools/integration_tests/tokenserver/test_misc.py::TestMisc::test_user_updates_with_same_client_state
+FAILED tools/integration_tests/tokenserver/test_misc.py::TestMisc::test_valid_app
+FAILED tools/integration_tests/tokenserver/test_misc.py::TestMisc::test_x_content_type_options
+FAILED tools/integration_tests/tokenserver/test_node_assignment.py::TestNodeAssignment::test_new_user_allocation
+FAILED tools/integration_tests/tokenserver/test_node_assignment.py::TestNodeAssignment::test_successfully_releasing_node_capacity
+FAILED tools/integration_tests/tokenserver/test_node_assignment.py::TestNodeAssignment::test_unsuccessfully_releasing_node_capacity
+FAILED tools/integration_tests/tokenserver/test_node_assignment.py::TestNodeAssignment::test_user_creation
+=========== 35 failed, 66 passed, 1 skipped, 129 warnings in 26.56s ============
+============================= test session starts ==============================
+platform linux -- Python 3.9.2, pytest-8.3.5, pluggy-1.6.0
+rootdir: /app
+collected 102 items
+
+tools/integration_tests/test_storage.py ................................ [ 31%]
+.......................s.......                                          [ 61%]
+tools/integration_tests/tokenserver/test_authorization.py FFFFF.FFFF.FFF [ 75%]
+F.FFFF                                                                   [ 81%]
+tools/integration_tests/tokenserver/test_e2e.py .F                       [ 83%]
+tools/integration_tests/tokenserver/test_misc.py FFFFFFFFFFFFF           [ 96%]
+tools/integration_tests/tokenserver/test_node_assignment.py FFFF         [100%]
+
+=================================== FAILURES ===================================
+_______________ TestAuthorization.test_client_specified_duration _______________
+
+self = <tokenserver.test_authorization.TestAuthorization testMethod=test_client_specified_duration>
+
+    def test_client_specified_duration(self):
+        self._add_user(generation=1234, keys_changed_at=1234,
+                       client_state='aaaa')
+        headers = self._build_auth_headers(generation=1234,
+                                           keys_changed_at=1234,
+                                           client_state='aaaa')
+        # It's ok to request a shorter-duration token.
+>       res = self.app.get('/1.0/sync/1.5?duration=12', headers=headers)
+
+tools/integration_tests/tokenserver/test_authorization.py:374: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:328: in get
+    return self.do_request(req, status=status,
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:653: in do_request
+    self._check_status(status, res)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <webtest.app.TestApp object at 0x7f0f443a0fd0>, status = None
+res = <401 Unauthorized application/json body=b'{"status..."}]}'/102>
+
+    def _check_status(self, status, res):
+        if status == '*':
+            return
+        res_status = res.status
+        if (isinstance(status, str) and '*' in status):
+            if re.match(fnmatch.translate(status), res_status, re.I):
+                return
+        if isinstance(status, str):
+            if status == res_status:
+                return
+        if isinstance(status, (list, tuple)):
+            if res.status_int not in status:
+                raise AppError(
+                    "Bad response: %s (not one of %s for %s)\n%s",
+                    res_status, ', '.join(map(str, status)),
+                    res.request.url, res)
+            return
+        if status is None:
+            if res.status_int >= 200 and res.status_int < 400:
+                return
+>           raise AppError(
+                "Bad response: %s (not 200 OK or 3xx redirect for %s)\n%s",
+                res_status, res.request.url,
+                res)
+E           webtest.app.AppError: Bad response: 401 Unauthorized (not 200 OK or 3xx redirect for http://localhost:8000/1.0/sync/1.5?duration=12)
+E           b'{"status":"invalid-credentials","errors":[{"location":"body","name":"","description":"Unauthorized"}]}'
+
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:682: AppError
+___________ TestAuthorization.test_disallow_reusing_old_client_state ___________
+
+self = <tokenserver.test_authorization.TestAuthorization testMethod=test_disallow_reusing_old_client_state>
+
+    def test_disallow_reusing_old_client_state(self):
+        # Add a user record that has already been replaced
+        self._add_user(client_state='aaaa', replaced_at=1200)
+        # Add the most up-to-date user record
+        self._add_user(client_state='bbbb')
+        # A request cannot use a client state associated with a replaced user
+        headers = self._build_auth_headers(generation=1234,
+                                           keys_changed_at=1234,
+                                           client_state='aaaa')
+        res = self.app.get('/1.0/sync/1.5', headers=headers, status=401)
+        expected_error_response = {
+            'status': 'invalid-client-state',
+            'errors': [
+                {
+                    'location': 'header',
+                    'name': 'X-Client-State',
+                    'description': 'Unacceptable client-state value stale '
+                                   'value'
+                }
+            ]
+        }
+>       self.assertEqual(res.json, expected_error_response)
+E       AssertionError: {'status': 'invalid-credentials', 'errors': [{'location': 'bod[43 chars]d'}]} != {'status': 'invalid-client-state', 'errors': [{'location': 'he[91 chars]e'}]}
+E       - {'errors': [{'description': 'Unauthorized', 'location': 'body', 'name': ''}],
+E       + {'errors': [{'description': 'Unacceptable client-state value stale value',
+E       +              'location': 'header',
+E       +              'name': 'X-Client-State'}],
+E       -  'status': 'invalid-credentials'}
+E       ?                      ^^^   ^ ^^
+E       
+E       +  'status': 'invalid-client-state'}
+E       ?                      ^^   ^^^ ^^
+
+tools/integration_tests/tokenserver/test_authorization.py:151: AssertionError
+----------------------------- Captured stderr call -----------------------------
+
+thread 'main' panicked at /app/syncserver/src/server/mod.rs:355:14:
+Could not get Server in Server::with_settings: Os { code: 98, kind: AddrInUse, message: "Address already in use" }
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+____________________ TestAuthorization.test_fxa_kid_change _____________________
+
+self = <tokenserver.test_authorization.TestAuthorization testMethod=test_fxa_kid_change>
+
+    def test_fxa_kid_change(self):
+        self._add_user(generation=1234, keys_changed_at=None,
+                       client_state='aaaa')
+        # An OAuth client shows up, setting keys_changed_at.
+        # (The value matches generation number above, beause in this scenario
+        # FxA hasn't been updated to track and report keysChangedAt yet).
+        headers = self._build_auth_headers(generation=1234,
+                                           keys_changed_at=1234,
+                                           client_state='aaaa')
+>       res = self.app.get('/1.0/sync/1.5', headers=headers)
+
+tools/integration_tests/tokenserver/test_authorization.py:327: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:328: in get
+    return self.do_request(req, status=status,
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:653: in do_request
+    self._check_status(status, res)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <webtest.app.TestApp object at 0x7f0f4435d520>, status = None
+res = <401 Unauthorized application/json body=b'{"status..."}]}'/102>
+
+    def _check_status(self, status, res):
+        if status == '*':
+            return
+        res_status = res.status
+        if (isinstance(status, str) and '*' in status):
+            if re.match(fnmatch.translate(status), res_status, re.I):
+                return
+        if isinstance(status, str):
+            if status == res_status:
+                return
+        if isinstance(status, (list, tuple)):
+            if res.status_int not in status:
+                raise AppError(
+                    "Bad response: %s (not one of %s for %s)\n%s",
+                    res_status, ', '.join(map(str, status)),
+                    res.request.url, res)
+            return
+        if status is None:
+            if res.status_int >= 200 and res.status_int < 400:
+                return
+>           raise AppError(
+                "Bad response: %s (not 200 OK or 3xx redirect for %s)\n%s",
+                res_status, res.request.url,
+                res)
+E           webtest.app.AppError: Bad response: 401 Unauthorized (not 200 OK or 3xx redirect for http://localhost:8000/1.0/sync/1.5)
+E           b'{"status":"invalid-credentials","errors":[{"location":"body","name":"","description":"Unauthorized"}]}'
+
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:682: AppError
+_ TestAuthorization.test_generation_change_must_accompany_client_state_change __
+
+self = <tokenserver.test_authorization.TestAuthorization testMethod=test_generation_change_must_accompany_client_state_change>
+
+    def test_generation_change_must_accompany_client_state_change(self):
+        self._add_user(generation=1234, client_state='aaaa')
+        # A request with a new client state must also contain a new generation
+        headers = self._build_auth_headers(generation=1234,
+                                           keys_changed_at=1234,
+                                           client_state='bbbb')
+        res = self.app.get('/1.0/sync/1.5', headers=headers, status=401)
+        expected_error_response = {
+            'status': 'invalid-client-state',
+            'errors': [
+                {
+                    'location': 'header',
+                    'name': 'X-Client-State',
+                    'description': 'Unacceptable client-state value new '
+                                   'value with no generation change'
+                }
+            ]
+        }
+>       self.assertEqual(res.json, expected_error_response)
+E       AssertionError: {'status': 'invalid-credentials', 'errors': [{'location': 'bod[43 chars]d'}]} != {'status': 'invalid-client-state', 'errors': [{'location': 'he[115 chars]e'}]}
+E       - {'errors': [{'description': 'Unauthorized', 'location': 'body', 'name': ''}],
+E       + {'errors': [{'description': 'Unacceptable client-state value new value with no '
+E       +                             'generation change',
+E       +              'location': 'header',
+E       +              'name': 'X-Client-State'}],
+E       -  'status': 'invalid-credentials'}
+E       ?                      ^^^   ^ ^^
+E       
+E       +  'status': 'invalid-client-state'}
+E       ?                      ^^   ^^^ ^^
+
+tools/integration_tests/tokenserver/test_authorization.py:184: AssertionError
+___ TestAuthorization.test_generation_must_not_be_less_than_last_seen_value ____
+
+self = <tokenserver.test_authorization.TestAuthorization testMethod=test_generation_must_not_be_less_than_last_seen_value>
+
+    def test_generation_must_not_be_less_than_last_seen_value(self):
+        uid = self._add_user(generation=1234)
+        # The generation in the request cannot be less than the generation
+        # currently stored on the user record
+        headers = self._build_auth_headers(generation=1233,
+                                           keys_changed_at=1234,
+                                           client_state='aaaa')
+        res = self.app.get('/1.0/sync/1.5', headers=headers, status=401)
+        expected_error_response = {
+            'status': 'invalid-generation',
+            'errors': [
+                {
+                    'location': 'body',
+                    'name': '',
+                    'description': 'Unauthorized',
+                }
+            ]
+        }
+>       self.assertEqual(res.json, expected_error_response)
+E       AssertionError: {'status': 'invalid-credentials', 'errors': [{'location': 'bo[44 chars]d'}]} != {'status': 'invalid-generation', 'errors': [{'location': 'bod[43 chars]d'}]}
+E         {'errors': [{'description': 'Unauthorized', 'location': 'body', 'name': ''}],
+E       -  'status': 'invalid-credentials'}
+E       ?                     ^^^^    ^^^
+E       
+E       +  'status': 'invalid-generation'}
+E       ?                     ^  +++  ^^
+
+tools/integration_tests/tokenserver/test_authorization.py:261: AssertionError
+________ TestAuthorization.test_invalid_client_state_in_x_client_state _________
+
+self = <tokenserver.test_authorization.TestAuthorization testMethod=test_invalid_client_state_in_x_client_state>
+
+    def test_invalid_client_state_in_x_client_state(self):
+        additional_headers = {'X-Client-State': 'state!'}
+        headers = self._build_auth_headers(generation=1234,
+                                           keys_changed_at=1234,
+                                           client_state='aaaa',
+                                           **additional_headers)
+    
+>       res = self.app.get('/1.0/sync/1.5', headers=headers, status=400)
+
+tools/integration_tests/tokenserver/test_authorization.py:78: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:328: in get
+    return self.do_request(req, status=status,
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:653: in do_request
+    self._check_status(status, res)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <webtest.app.TestApp object at 0x7f0f4428d3a0>, status = 400
+res = <401 Unauthorized application/json body=b'{"status..."}]}'/102>
+
+    def _check_status(self, status, res):
+        if status == '*':
+            return
+        res_status = res.status
+        if (isinstance(status, str) and '*' in status):
+            if re.match(fnmatch.translate(status), res_status, re.I):
+                return
+        if isinstance(status, str):
+            if status == res_status:
+                return
+        if isinstance(status, (list, tuple)):
+            if res.status_int not in status:
+                raise AppError(
+                    "Bad response: %s (not one of %s for %s)\n%s",
+                    res_status, ', '.join(map(str, status)),
+                    res.request.url, res)
+            return
+        if status is None:
+            if res.status_int >= 200 and res.status_int < 400:
+                return
+            raise AppError(
+                "Bad response: %s (not 200 OK or 3xx redirect for %s)\n%s",
+                res_status, res.request.url,
+                res)
+        if status != res.status_int:
+>           raise AppError(
+                "Bad response: %s (not %s)\n%s", res_status, status, res)
+E           webtest.app.AppError: Bad response: 401 Unauthorized (not 400)
+E           b'{"status":"invalid-credentials","errors":[{"location":"body","name":"","description":"Unauthorized"}]}'
+
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:687: AppError
+_ TestAuthorization.test_keys_changed_at_change_must_accompany_client_state_change _
+
+self = <tokenserver.test_authorization.TestAuthorization testMethod=test_keys_changed_at_change_must_accompany_client_state_change>
+
+    def test_keys_changed_at_change_must_accompany_client_state_change(self):
+        self._add_user(generation=1234, keys_changed_at=1234,
+                       client_state='aaaa')
+        # A request with a new client state must also contain a new
+        # keys_changed_at
+        headers = self._build_auth_headers(generation=1235,
+                                           keys_changed_at=1234,
+                                           client_state='bbbb')
+        res = self.app.get('/1.0/sync/1.5', headers=headers, status=401)
+        expected_error_response = {
+            'status': 'invalid-client-state',
+            'errors': [
+                {
+                    'location': 'header',
+                    'name': 'X-Client-State',
+                    'description': 'Unacceptable client-state value new '
+                                   'value with no keys_changed_at change'
+                }
+            ]
+        }
+>       self.assertEqual(res.json, expected_error_response)
+E       AssertionError: {'status': 'invalid-credentials', 'errors': [{'location': 'bod[43 chars]d'}]} != {'status': 'invalid-client-state', 'errors': [{'location': 'he[120 chars]e'}]}
+E       - {'errors': [{'description': 'Unauthorized', 'location': 'body', 'name': ''}],
+E       + {'errors': [{'description': 'Unacceptable client-state value new value with no '
+E       +                             'keys_changed_at change',
+E       +              'location': 'header',
+E       +              'name': 'X-Client-State'}],
+E       -  'status': 'invalid-credentials'}
+E       ?                      ^^^   ^ ^^
+E       
+E       +  'status': 'invalid-client-state'}
+E       ?                      ^^   ^^^ ^^
+
+tools/integration_tests/tokenserver/test_authorization.py:236: AssertionError
+_____ TestAuthorization.test_keys_changed_at_less_than_equal_to_generation _____
+
+self = <tokenserver.test_authorization.TestAuthorization testMethod=test_keys_changed_at_less_than_equal_to_generation>
+
+    def test_keys_changed_at_less_than_equal_to_generation(self):
+        self._add_user(generation=1232, keys_changed_at=1234)
+        # If keys_changed_at changes, that change must be less than or equal
+        # to the new generation
+        headers = self._build_auth_headers(generation=1235,
+                                           keys_changed_at=1236,
+                                           client_state='aaaa')
+        res = self.app.get('/1.0/sync/1.5', headers=headers, status=401)
+        expected_error_response = {
+            'status': 'invalid-keysChangedAt',
+            'errors': [
+                {
+                    'location': 'body',
+                    'name': '',
+                    'description': 'Unauthorized'
+                }
+            ]
+        }
+>       self.assertEqual(res.json, expected_error_response)
+E       AssertionError: {'status': 'invalid-credentials', 'errors': [{'location': 'bo[44 chars]d'}]} != {'status': 'invalid-keysChangedAt', 'errors': [{'location': '[46 chars]d'}]}
+E         {'errors': [{'description': 'Unauthorized', 'location': 'body', 'name': ''}],
+E       -  'status': 'invalid-credentials'}
+E       +  'status': 'invalid-keysChangedAt'}
+
+tools/integration_tests/tokenserver/test_authorization.py:110: AssertionError
+_____ TestAuthorization.test_kid_change_during_gradual_tokenserver_rollout _____
+
+self = <tokenserver.test_authorization.TestAuthorization testMethod=test_kid_change_during_gradual_tokenserver_rollout>
+
+    def test_kid_change_during_gradual_tokenserver_rollout(self):
+        # Let's start with a user already in the db, with no keys_changed_at.
+        uid = self._add_user(generation=1234, client_state='aaaa',
+                             keys_changed_at=None)
+        user1 = self._get_user(uid)
+        # User hits updated tokenserver node, writing keys_changed_at to db.
+        headers = self._build_auth_headers(generation=1234,
+                                           keys_changed_at=1200,
+                                           client_state='aaaa')
+>       res = self.app.get('/1.0/sync/1.5', headers=headers)
+
+tools/integration_tests/tokenserver/test_authorization.py:397: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:328: in get
+    return self.do_request(req, status=status,
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:653: in do_request
+    self._check_status(status, res)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <webtest.app.TestApp object at 0x7f0f456c8790>, status = None
+res = <401 Unauthorized application/json body=b'{"status..."}]}'/102>
+
+    def _check_status(self, status, res):
+        if status == '*':
+            return
+        res_status = res.status
+        if (isinstance(status, str) and '*' in status):
+            if re.match(fnmatch.translate(status), res_status, re.I):
+                return
+        if isinstance(status, str):
+            if status == res_status:
+                return
+        if isinstance(status, (list, tuple)):
+            if res.status_int not in status:
+                raise AppError(
+                    "Bad response: %s (not one of %s for %s)\n%s",
+                    res_status, ', '.join(map(str, status)),
+                    res.request.url, res)
+            return
+        if status is None:
+            if res.status_int >= 200 and res.status_int < 400:
+                return
+>           raise AppError(
+                "Bad response: %s (not 200 OK or 3xx redirect for %s)\n%s",
+                res_status, res.request.url,
+                res)
+E           webtest.app.AppError: Bad response: 401 Unauthorized (not 200 OK or 3xx redirect for http://localhost:8000/1.0/sync/1.5)
+E           b'{"status":"invalid-credentials","errors":[{"location":"body","name":"","description":"Unauthorized"}]}'
+
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:682: AppError
+___________ TestAuthorization.test_set_generation_from_no_generation ___________
+
+self = <tokenserver.test_authorization.TestAuthorization testMethod=test_set_generation_from_no_generation>
+
+    def test_set_generation_from_no_generation(self):
+        # Add a user that has no generation set
+        uid = self._add_user(generation=0, keys_changed_at=None,
+                             client_state='aaaa')
+        headers = self._build_auth_headers(generation=1234,
+                                           keys_changed_at=1234,
+                                           client_state='aaaa')
+        # Send a request to set the generation
+>       self.app.get('/1.0/sync/1.5', headers=headers)
+
+tools/integration_tests/tokenserver/test_authorization.py:508: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:328: in get
+    return self.do_request(req, status=status,
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:653: in do_request
+    self._check_status(status, res)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <webtest.app.TestApp object at 0x7f0f444fcdc0>, status = None
+res = <401 Unauthorized application/json body=b'{"status..."}]}'/102>
+
+    def _check_status(self, status, res):
+        if status == '*':
+            return
+        res_status = res.status
+        if (isinstance(status, str) and '*' in status):
+            if re.match(fnmatch.translate(status), res_status, re.I):
+                return
+        if isinstance(status, str):
+            if status == res_status:
+                return
+        if isinstance(status, (list, tuple)):
+            if res.status_int not in status:
+                raise AppError(
+                    "Bad response: %s (not one of %s for %s)\n%s",
+                    res_status, ', '.join(map(str, status)),
+                    res.request.url, res)
+            return
+        if status is None:
+            if res.status_int >= 200 and res.status_int < 400:
+                return
+>           raise AppError(
+                "Bad response: %s (not 200 OK or 3xx redirect for %s)\n%s",
+                res_status, res.request.url,
+                res)
+E           webtest.app.AppError: Bad response: 401 Unauthorized (not 200 OK or 3xx redirect for http://localhost:8000/1.0/sync/1.5)
+E           b'{"status":"invalid-credentials","errors":[{"location":"body","name":"","description":"Unauthorized"}]}'
+
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:682: AppError
+_ TestAuthorization.test_set_generation_unchanged_without_keys_changed_at_update _
+
+self = <tokenserver.test_authorization.TestAuthorization testMethod=test_set_generation_unchanged_without_keys_changed_at_update>
+
+    def test_set_generation_unchanged_without_keys_changed_at_update(self):
+        # Add a user who has never sent us a generation
+        uid = self._add_user(generation=0, keys_changed_at=1234,
+                             client_state='aaaa')
+        # Send a request without a generation that doesn't update
+        # keys_changed_at
+        headers = self._build_auth_headers(generation=None,
+                                           keys_changed_at=1234,
+                                           client_state='aaaa')
+>       self.app.get('/1.0/sync/1.5', headers=headers)
+
+tools/integration_tests/tokenserver/test_authorization.py:291: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:328: in get
+    return self.do_request(req, status=status,
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:653: in do_request
+    self._check_status(status, res)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <webtest.app.TestApp object at 0x7f0f44856070>, status = None
+res = <401 Unauthorized application/json body=b'{"status..."}]}'/102>
+
+    def _check_status(self, status, res):
+        if status == '*':
+            return
+        res_status = res.status
+        if (isinstance(status, str) and '*' in status):
+            if re.match(fnmatch.translate(status), res_status, re.I):
+                return
+        if isinstance(status, str):
+            if status == res_status:
+                return
+        if isinstance(status, (list, tuple)):
+            if res.status_int not in status:
+                raise AppError(
+                    "Bad response: %s (not one of %s for %s)\n%s",
+                    res_status, ', '.join(map(str, status)),
+                    res.request.url, res)
+            return
+        if status is None:
+            if res.status_int >= 200 and res.status_int < 400:
+                return
+>           raise AppError(
+                "Bad response: %s (not 200 OK or 3xx redirect for %s)\n%s",
+                res_status, res.request.url,
+                res)
+E           webtest.app.AppError: Bad response: 401 Unauthorized (not 200 OK or 3xx redirect for http://localhost:8000/1.0/sync/1.5)
+E           b'{"status":"invalid-credentials","errors":[{"location":"body","name":"","description":"Unauthorized"}]}'
+
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:682: AppError
+__ TestAuthorization.test_set_generation_with_keys_changed_at_initialization ___
+
+self = <tokenserver.test_authorization.TestAuthorization testMethod=test_set_generation_with_keys_changed_at_initialization>
+
+    def test_set_generation_with_keys_changed_at_initialization(self):
+        # Add a user who has never sent us a generation or a keys_changed_at
+        uid = self._add_user(generation=0, keys_changed_at=None,
+                             client_state='aaaa')
+    
+        # Send a request without a generation that updates keys_changed_at
+        headers = self._build_auth_headers(generation=None,
+                                           keys_changed_at=1234,
+                                           client_state='aaaa')
+>       self.app.get('/1.0/sync/1.5', headers=headers)
+
+tools/integration_tests/tokenserver/test_authorization.py:313: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:328: in get
+    return self.do_request(req, status=status,
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:653: in do_request
+    self._check_status(status, res)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <webtest.app.TestApp object at 0x7f0f44652550>, status = None
+res = <401 Unauthorized application/json body=b'{"status..."}]}'/102>
+
+    def _check_status(self, status, res):
+        if status == '*':
+            return
+        res_status = res.status
+        if (isinstance(status, str) and '*' in status):
+            if re.match(fnmatch.translate(status), res_status, re.I):
+                return
+        if isinstance(status, str):
+            if status == res_status:
+                return
+        if isinstance(status, (list, tuple)):
+            if res.status_int not in status:
+                raise AppError(
+                    "Bad response: %s (not one of %s for %s)\n%s",
+                    res_status, ', '.join(map(str, status)),
+                    res.request.url, res)
+            return
+        if status is None:
+            if res.status_int >= 200 and res.status_int < 400:
+                return
+>           raise AppError(
+                "Bad response: %s (not 200 OK or 3xx redirect for %s)\n%s",
+                res_status, res.request.url,
+                res)
+E           webtest.app.AppError: Bad response: 401 Unauthorized (not 200 OK or 3xx redirect for http://localhost:8000/1.0/sync/1.5)
+E           b'{"status":"invalid-credentials","errors":[{"location":"body","name":"","description":"Unauthorized"}]}'
+
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:682: AppError
+______ TestAuthorization.test_set_keys_changed_at_from_no_keys_changed_at ______
+
+self = <tokenserver.test_authorization.TestAuthorization testMethod=test_set_keys_changed_at_from_no_keys_changed_at>
+
+    def test_set_keys_changed_at_from_no_keys_changed_at(self):
+        # Add a user that has no keys_changed_at set
+        uid = self._add_user(generation=1234, keys_changed_at=None,
+                             client_state='aaaa')
+        headers = self._build_auth_headers(generation=1234,
+                                           keys_changed_at=1234,
+                                           client_state='aaaa')
+        # Send a request to set the keys_changed_at
+>       self.app.get('/1.0/sync/1.5', headers=headers)
+
+tools/integration_tests/tokenserver/test_authorization.py:521: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:328: in get
+    return self.do_request(req, status=status,
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:653: in do_request
+    self._check_status(status, res)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <webtest.app.TestApp object at 0x7f0f44a0f310>, status = None
+res = <401 Unauthorized application/json body=b'{"status..."}]}'/102>
+
+    def _check_status(self, status, res):
+        if status == '*':
+            return
+        res_status = res.status
+        if (isinstance(status, str) and '*' in status):
+            if re.match(fnmatch.translate(status), res_status, re.I):
+                return
+        if isinstance(status, str):
+            if status == res_status:
+                return
+        if isinstance(status, (list, tuple)):
+            if res.status_int not in status:
+                raise AppError(
+                    "Bad response: %s (not one of %s for %s)\n%s",
+                    res_status, ', '.join(map(str, status)),
+                    res.request.url, res)
+            return
+        if status is None:
+            if res.status_int >= 200 and res.status_int < 400:
+                return
+>           raise AppError(
+                "Bad response: %s (not 200 OK or 3xx redirect for %s)\n%s",
+                res_status, res.request.url,
+                res)
+E           webtest.app.AppError: Bad response: 401 Unauthorized (not 200 OK or 3xx redirect for http://localhost:8000/1.0/sync/1.5)
+E           b'{"status":"invalid-credentials","errors":[{"location":"body","name":"","description":"Unauthorized"}]}'
+
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:682: AppError
+__________________ TestAuthorization.test_update_client_state __________________
+
+self = <tokenserver.test_authorization.TestAuthorization testMethod=test_update_client_state>
+
+    def test_update_client_state(self):
+        uid = self._add_user(generation=0, keys_changed_at=None,
+                             client_state='')
+        user1 = self._get_user(uid)
+        # The user starts out with no client_state
+        self.assertEqual(user1['generation'], 0)
+        self.assertEqual(user1['client_state'], '')
+        seen_uids = set((uid,))
+        orig_node = user1['nodeid']
+        # Changing client_state allocates a new user, resulting in a new uid
+        headers = self._build_auth_headers(generation=1234,
+                                           keys_changed_at=1234,
+                                           client_state='bbbb')
+>       res = self.app.get('/1.0/sync/1.5', headers=headers)
+
+tools/integration_tests/tokenserver/test_authorization.py:442: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:328: in get
+    return self.do_request(req, status=status,
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:653: in do_request
+    self._check_status(status, res)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <webtest.app.TestApp object at 0x7f0f447c1e80>, status = None
+res = <401 Unauthorized application/json body=b'{"status..."}]}'/102>
+
+    def _check_status(self, status, res):
+        if status == '*':
+            return
+        res_status = res.status
+        if (isinstance(status, str) and '*' in status):
+            if re.match(fnmatch.translate(status), res_status, re.I):
+                return
+        if isinstance(status, str):
+            if status == res_status:
+                return
+        if isinstance(status, (list, tuple)):
+            if res.status_int not in status:
+                raise AppError(
+                    "Bad response: %s (not one of %s for %s)\n%s",
+                    res_status, ', '.join(map(str, status)),
+                    res.request.url, res)
+            return
+        if status is None:
+            if res.status_int >= 200 and res.status_int < 400:
+                return
+>           raise AppError(
+                "Bad response: %s (not 200 OK or 3xx redirect for %s)\n%s",
+                res_status, res.request.url,
+                res)
+E           webtest.app.AppError: Bad response: 401 Unauthorized (not 200 OK or 3xx redirect for http://localhost:8000/1.0/sync/1.5)
+E           b'{"status":"invalid-credentials","errors":[{"location":"body","name":"","description":"Unauthorized"}]}'
+
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:682: AppError
+_ TestAuthorization.test_x_client_state_must_have_same_client_state_as_key_id __
+
+self = <tokenserver.test_authorization.TestAuthorization testMethod=test_x_client_state_must_have_same_client_state_as_key_id>
+
+    def test_x_client_state_must_have_same_client_state_as_key_id(self):
+        self._add_user(client_state='aaaa')
+        additional_headers = {'X-Client-State': 'bbbb'}
+        headers = self._build_auth_headers(
+            generation=1234,
+            keys_changed_at=1234,
+            client_state='aaaa',
+            **additional_headers)
+        # If present, the X-Client-State header must have the same client
+        # state as the X-KeyID header
+        res = self.app.get('/1.0/sync/1.5', headers=headers, status=401)
+        expected_error_response = {
+            'errors': [
+                {
+                    'description': 'Unauthorized',
+                    'location': 'body',
+                    'name': ''
+                }
+            ],
+            'status': 'invalid-client-state'
+        }
+>       self.assertEqual(res.json, expected_error_response)
+E       AssertionError: {'status': 'invalid-credentials', 'errors':[62 chars]d'}]} != {'errors': [{'description': 'Unauthorized',[63 chars]ate'}
+E         {'errors': [{'description': 'Unauthorized', 'location': 'body', 'name': ''}],
+E       -  'status': 'invalid-credentials'}
+E       ?                      ^^^   ^ ^^
+E       
+E       +  'status': 'invalid-client-state'}
+E       ?                      ^^   ^^^ ^^
+
+tools/integration_tests/tokenserver/test_authorization.py:547: AssertionError
+____________ TestAuthorization.test_zero_generation_treated_as_null ____________
+
+self = <tokenserver.test_authorization.TestAuthorization testMethod=test_zero_generation_treated_as_null>
+
+    def test_zero_generation_treated_as_null(self):
+        # Add a user that has a generation set
+        uid = self._add_user(generation=1234, keys_changed_at=1234,
+                             client_state='aaaa')
+        headers = self._build_auth_headers(generation=0,
+                                           keys_changed_at=1234,
+                                           client_state='aaaa')
+        # Send a request with a generation of 0
+>       self.app.get('/1.0/sync/1.5', headers=headers)
+
+tools/integration_tests/tokenserver/test_authorization.py:559: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:328: in get
+    return self.do_request(req, status=status,
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:653: in do_request
+    self._check_status(status, res)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <webtest.app.TestApp object at 0x7f0f44536a00>, status = None
+res = <401 Unauthorized application/json body=b'{"status..."}]}'/102>
+
+    def _check_status(self, status, res):
+        if status == '*':
+            return
+        res_status = res.status
+        if (isinstance(status, str) and '*' in status):
+            if re.match(fnmatch.translate(status), res_status, re.I):
+                return
+        if isinstance(status, str):
+            if status == res_status:
+                return
+        if isinstance(status, (list, tuple)):
+            if res.status_int not in status:
+                raise AppError(
+                    "Bad response: %s (not one of %s for %s)\n%s",
+                    res_status, ', '.join(map(str, status)),
+                    res.request.url, res)
+            return
+        if status is None:
+            if res.status_int >= 200 and res.status_int < 400:
+                return
+>           raise AppError(
+                "Bad response: %s (not 200 OK or 3xx redirect for %s)\n%s",
+                res_status, res.request.url,
+                res)
+E           webtest.app.AppError: Bad response: 401 Unauthorized (not 200 OK or 3xx redirect for http://localhost:8000/1.0/sync/1.5)
+E           b'{"status":"invalid-credentials","errors":[{"location":"body","name":"","description":"Unauthorized"}]}'
+
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:682: AppError
+_________ TestAuthorization.test_zero_keys_changed_at_treated_as_null __________
+
+self = <tokenserver.test_authorization.TestAuthorization testMethod=test_zero_keys_changed_at_treated_as_null>
+
+    def test_zero_keys_changed_at_treated_as_null(self):
+        # Add a user that has no keys_changed_at set
+        uid = self._add_user(generation=1234, keys_changed_at=None,
+                             client_state='aaaa')
+        headers = self._build_auth_headers(generation=1234,
+                                           keys_changed_at=0,
+                                           client_state='aaaa')
+        # Send a request with a keys_changed_at of 0
+>       self.app.get('/1.0/sync/1.5', headers=headers)
+
+tools/integration_tests/tokenserver/test_authorization.py:573: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:328: in get
+    return self.do_request(req, status=status,
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:653: in do_request
+    self._check_status(status, res)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <webtest.app.TestApp object at 0x7f0f44689c10>, status = None
+res = <401 Unauthorized application/json body=b'{"status..."}]}'/102>
+
+    def _check_status(self, status, res):
+        if status == '*':
+            return
+        res_status = res.status
+        if (isinstance(status, str) and '*' in status):
+            if re.match(fnmatch.translate(status), res_status, re.I):
+                return
+        if isinstance(status, str):
+            if status == res_status:
+                return
+        if isinstance(status, (list, tuple)):
+            if res.status_int not in status:
+                raise AppError(
+                    "Bad response: %s (not one of %s for %s)\n%s",
+                    res_status, ', '.join(map(str, status)),
+                    res.request.url, res)
+            return
+        if status is None:
+            if res.status_int >= 200 and res.status_int < 400:
+                return
+>           raise AppError(
+                "Bad response: %s (not 200 OK or 3xx redirect for %s)\n%s",
+                res_status, res.request.url,
+                res)
+E           webtest.app.AppError: Bad response: 401 Unauthorized (not 200 OK or 3xx redirect for http://localhost:8000/1.0/sync/1.5)
+E           b'{"status":"invalid-credentials","errors":[{"location":"body","name":"","description":"Unauthorized"}]}'
+
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:682: AppError
+_______________________ TestE2e.test_valid_oauth_request _______________________
+
+self = <tokenserver.test_e2e.TestE2e testMethod=test_valid_oauth_request>
+
+    def test_valid_oauth_request(self):
+        oauth_token = self.oauth_token
+        headers = {
+            'Authorization': 'Bearer %s' % oauth_token,
+            'X-KeyID': '1234-qqo'
+        }
+        # Send a valid request, allocating a new user
+>       res = self.app.get('/1.0/sync/1.5', headers=headers)
+
+tools/integration_tests/tokenserver/test_e2e.py:185: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:328: in get
+    return self.do_request(req, status=status,
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:653: in do_request
+    self._check_status(status, res)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <webtest.app.TestApp object at 0x7f0f44a82c10>, status = None
+res = <401 Unauthorized application/json body=b'{"status..."}]}'/102>
+
+    def _check_status(self, status, res):
+        if status == '*':
+            return
+        res_status = res.status
+        if (isinstance(status, str) and '*' in status):
+            if re.match(fnmatch.translate(status), res_status, re.I):
+                return
+        if isinstance(status, str):
+            if status == res_status:
+                return
+        if isinstance(status, (list, tuple)):
+            if res.status_int not in status:
+                raise AppError(
+                    "Bad response: %s (not one of %s for %s)\n%s",
+                    res_status, ', '.join(map(str, status)),
+                    res.request.url, res)
+            return
+        if status is None:
+            if res.status_int >= 200 and res.status_int < 400:
+                return
+>           raise AppError(
+                "Bad response: %s (not 200 OK or 3xx redirect for %s)\n%s",
+                res_status, res.request.url,
+                res)
+E           webtest.app.AppError: Bad response: 401 Unauthorized (not 200 OK or 3xx redirect for http://localhost:8000/1.0/sync/1.5)
+E           b'{"status":"invalid-credentials","errors":[{"location":"body","name":"","description":"Unauthorized"}]}'
+
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:682: AppError
+______________ TestMisc.test_current_user_is_the_most_up_to_date _______________
+
+self = <tokenserver.test_misc.TestMisc testMethod=test_current_user_is_the_most_up_to_date>
+
+    def test_current_user_is_the_most_up_to_date(self):
+        # Add some users
+        self._add_user(generation=1234, created_at=1234)
+        self._add_user(generation=1235, created_at=1234)
+        self._add_user(generation=1234, created_at=1235)
+        uid = self._add_user(generation=1236, created_at=1233)
+        # Users are sorted by (generation, created_at), so the fourth user
+        # record is considered to be the current user
+        headers = self._build_auth_headers(generation=1236,
+                                           keys_changed_at=1234,
+                                           client_state='aaaa')
+>       res = self.app.get('/1.0/sync/1.5', headers=headers)
+
+tools/integration_tests/tokenserver/test_misc.py:75: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:328: in get
+    return self.do_request(req, status=status,
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:653: in do_request
+    self._check_status(status, res)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <webtest.app.TestApp object at 0x7f0f444f88b0>, status = None
+res = <401 Unauthorized application/json body=b'{"status..."}]}'/102>
+
+    def _check_status(self, status, res):
+        if status == '*':
+            return
+        res_status = res.status
+        if (isinstance(status, str) and '*' in status):
+            if re.match(fnmatch.translate(status), res_status, re.I):
+                return
+        if isinstance(status, str):
+            if status == res_status:
+                return
+        if isinstance(status, (list, tuple)):
+            if res.status_int not in status:
+                raise AppError(
+                    "Bad response: %s (not one of %s for %s)\n%s",
+                    res_status, ', '.join(map(str, status)),
+                    res.request.url, res)
+            return
+        if status is None:
+            if res.status_int >= 200 and res.status_int < 400:
+                return
+>           raise AppError(
+                "Bad response: %s (not 200 OK or 3xx redirect for %s)\n%s",
+                res_status, res.request.url,
+                res)
+E           webtest.app.AppError: Bad response: 401 Unauthorized (not 200 OK or 3xx redirect for http://localhost:8000/1.0/sync/1.5)
+E           b'{"status":"invalid-credentials","errors":[{"location":"body","name":"","description":"Unauthorized"}]}'
+
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:682: AppError
+_________ TestMisc.test_old_users_marked_as_replaced_in_race_recovery __________
+
+self = <tokenserver.test_misc.TestMisc testMethod=test_old_users_marked_as_replaced_in_race_recovery>
+
+    def test_old_users_marked_as_replaced_in_race_recovery(self):
+        # Add some users
+        uid1 = self._add_user(generation=1234, created_at=1234)
+        uid2 = self._add_user(generation=1235, created_at=1235)
+        uid3 = self._add_user(generation=1236, created_at=1240)
+        # Make a request
+        headers = self._build_auth_headers(generation=1236,
+                                           keys_changed_at=1236,
+                                           client_state='aaaa')
+>       res = self.app.get('/1.0/sync/1.5', headers=headers)
+
+tools/integration_tests/tokenserver/test_misc.py:102: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:328: in get
+    return self.do_request(req, status=status,
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:653: in do_request
+    self._check_status(status, res)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <webtest.app.TestApp object at 0x7f0f4492e700>, status = None
+res = <401 Unauthorized application/json body=b'{"status..."}]}'/102>
+
+    def _check_status(self, status, res):
+        if status == '*':
+            return
+        res_status = res.status
+        if (isinstance(status, str) and '*' in status):
+            if re.match(fnmatch.translate(status), res_status, re.I):
+                return
+        if isinstance(status, str):
+            if status == res_status:
+                return
+        if isinstance(status, (list, tuple)):
+            if res.status_int not in status:
+                raise AppError(
+                    "Bad response: %s (not one of %s for %s)\n%s",
+                    res_status, ', '.join(map(str, status)),
+                    res.request.url, res)
+            return
+        if status is None:
+            if res.status_int >= 200 and res.status_int < 400:
+                return
+>           raise AppError(
+                "Bad response: %s (not 200 OK or 3xx redirect for %s)\n%s",
+                res_status, res.request.url,
+                res)
+E           webtest.app.AppError: Bad response: 401 Unauthorized (not 200 OK or 3xx redirect for http://localhost:8000/1.0/sync/1.5)
+E           b'{"status":"invalid-credentials","errors":[{"location":"body","name":"","description":"Unauthorized"}]}'
+
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:682: AppError
+________________ TestMisc.test_replaced_users_can_make_requests ________________
+
+self = <tokenserver.test_misc.TestMisc testMethod=test_replaced_users_can_make_requests>
+
+    def test_replaced_users_can_make_requests(self):
+        # Add a replaced user to the database
+        self._add_user(generation=1234, created_at=1234, replaced_at=1234)
+        headers = self._build_auth_headers(generation=1234,
+                                           keys_changed_at=1234,
+                                           client_state='aaaa')
+        # Replaced users can make requests
+>       self.app.get('/1.0/sync/1.5', headers=headers)
+
+tools/integration_tests/tokenserver/test_misc.py:200: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:328: in get
+    return self.do_request(req, status=status,
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:653: in do_request
+    self._check_status(status, res)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <webtest.app.TestApp object at 0x7f0f4483d070>, status = None
+res = <401 Unauthorized application/json body=b'{"status..."}]}'/102>
+
+    def _check_status(self, status, res):
+        if status == '*':
+            return
+        res_status = res.status
+        if (isinstance(status, str) and '*' in status):
+            if re.match(fnmatch.translate(status), res_status, re.I):
+                return
+        if isinstance(status, str):
+            if status == res_status:
+                return
+        if isinstance(status, (list, tuple)):
+            if res.status_int not in status:
+                raise AppError(
+                    "Bad response: %s (not one of %s for %s)\n%s",
+                    res_status, ', '.join(map(str, status)),
+                    res.request.url, res)
+            return
+        if status is None:
+            if res.status_int >= 200 and res.status_int < 400:
+                return
+>           raise AppError(
+                "Bad response: %s (not 200 OK or 3xx redirect for %s)\n%s",
+                res_status, res.request.url,
+                res)
+E           webtest.app.AppError: Bad response: 401 Unauthorized (not 200 OK or 3xx redirect for http://localhost:8000/1.0/sync/1.5)
+E           b'{"status":"invalid-credentials","errors":[{"location":"body","name":"","description":"Unauthorized"}]}'
+
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:682: AppError
+_________ TestMisc.test_replaced_users_with_no_node_can_make_requests __________
+
+self = <tokenserver.test_misc.TestMisc testMethod=test_replaced_users_with_no_node_can_make_requests>
+
+    def test_replaced_users_with_no_node_can_make_requests(self):
+        # Add a replaced user to the database
+        invalid_node_id = self.NODE_ID + 1
+        self._add_user(created_at=1234, replaced_at=1234,
+                       nodeid=invalid_node_id)
+        headers = self._build_auth_headers(generation=1234,
+                                           keys_changed_at=1234,
+                                           client_state='aaaa')
+        # Replaced users without a node can make requests
+>       res = self.app.get('/1.0/sync/1.5', headers=headers)
+
+tools/integration_tests/tokenserver/test_misc.py:221: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:328: in get
+    return self.do_request(req, status=status,
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:653: in do_request
+    self._check_status(status, res)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <webtest.app.TestApp object at 0x7f0f4435afa0>, status = None
+res = <401 Unauthorized application/json body=b'{"status..."}]}'/102>
+
+    def _check_status(self, status, res):
+        if status == '*':
+            return
+        res_status = res.status
+        if (isinstance(status, str) and '*' in status):
+            if re.match(fnmatch.translate(status), res_status, re.I):
+                return
+        if isinstance(status, str):
+            if status == res_status:
+                return
+        if isinstance(status, (list, tuple)):
+            if res.status_int not in status:
+                raise AppError(
+                    "Bad response: %s (not one of %s for %s)\n%s",
+                    res_status, ', '.join(map(str, status)),
+                    res.request.url, res)
+            return
+        if status is None:
+            if res.status_int >= 200 and res.status_int < 400:
+                return
+>           raise AppError(
+                "Bad response: %s (not 200 OK or 3xx redirect for %s)\n%s",
+                res_status, res.request.url,
+                res)
+E           webtest.app.AppError: Bad response: 401 Unauthorized (not 200 OK or 3xx redirect for http://localhost:8000/1.0/sync/1.5)
+E           b'{"status":"invalid-credentials","errors":[{"location":"body","name":"","description":"Unauthorized"}]}'
+
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:682: AppError
+________________ TestMisc.test_retired_users_can_make_requests _________________
+
+self = <tokenserver.test_misc.TestMisc testMethod=test_retired_users_can_make_requests>
+
+    def test_retired_users_can_make_requests(self):
+        # Add a retired user to the database
+        self._add_user(generation=MAX_GENERATION)
+        headers = self._build_auth_headers(generation=1235,
+                                           keys_changed_at=1234,
+                                           client_state='aaaa')
+        # Retired users cannot make requests with a generation smaller than
+        # the max generation
+        res = self.app.get('/1.0/sync/1.5', headers=headers, status=401)
+        expected_error_response = {
+            "status": "invalid-generation",
+            "errors": [
+                {
+                    "location": "body",
+                    "name": "",
+                    "description": "Unauthorized"
+                }
+            ]
+        }
+>       self.assertEqual(res.json, expected_error_response)
+E       AssertionError: {'status': 'invalid-credentials', 'errors': [{'location': 'bo[44 chars]d'}]} != {'status': 'invalid-generation', 'errors': [{'location': 'bod[43 chars]d'}]}
+E         {'errors': [{'description': 'Unauthorized', 'location': 'body', 'name': ''}],
+E       -  'status': 'invalid-credentials'}
+E       ?                     ^^^^    ^^^
+E       
+E       +  'status': 'invalid-generation'}
+E       ?                     ^  +++  ^^
+
+tools/integration_tests/tokenserver/test_misc.py:185: AssertionError
+________ TestMisc.test_retired_users_with_no_node_cannot_make_requests _________
+
+self = <tokenserver.test_misc.TestMisc testMethod=test_retired_users_with_no_node_cannot_make_requests>
+
+    def test_retired_users_with_no_node_cannot_make_requests(self):
+        # Add a retired user to the database
+        invalid_node_id = self.NODE_ID + 1
+        self._add_user(generation=MAX_GENERATION, nodeid=invalid_node_id)
+        # Retired users without a node cannot make requests
+        headers = self._build_auth_headers(generation=MAX_GENERATION,
+                                           keys_changed_at=1234,
+                                           client_state='aaaa')
+>       self.app.get('/1.0/sync/1.5', headers=headers, status=500)
+
+tools/integration_tests/tokenserver/test_misc.py:210: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:328: in get
+    return self.do_request(req, status=status,
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:653: in do_request
+    self._check_status(status, res)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <webtest.app.TestApp object at 0x7f0f447effd0>, status = 500
+res = <401 Unauthorized application/json body=b'{"status..."}]}'/102>
+
+    def _check_status(self, status, res):
+        if status == '*':
+            return
+        res_status = res.status
+        if (isinstance(status, str) and '*' in status):
+            if re.match(fnmatch.translate(status), res_status, re.I):
+                return
+        if isinstance(status, str):
+            if status == res_status:
+                return
+        if isinstance(status, (list, tuple)):
+            if res.status_int not in status:
+                raise AppError(
+                    "Bad response: %s (not one of %s for %s)\n%s",
+                    res_status, ', '.join(map(str, status)),
+                    res.request.url, res)
+            return
+        if status is None:
+            if res.status_int >= 200 and res.status_int < 400:
+                return
+            raise AppError(
+                "Bad response: %s (not 200 OK or 3xx redirect for %s)\n%s",
+                res_status, res.request.url,
+                res)
+        if status != res.status_int:
+>           raise AppError(
+                "Bad response: %s (not %s)\n%s", res_status, status, res)
+E           webtest.app.AppError: Bad response: 401 Unauthorized (not 500)
+E           b'{"status":"invalid-credentials","errors":[{"location":"body","name":"","description":"Unauthorized"}]}'
+
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:687: AppError
+__________________________ TestMisc.test_unknown_app ___________________________
+
+self = <tokenserver.test_misc.TestMisc testMethod=test_unknown_app>
+
+    def test_unknown_app(self):
+        headers = self._build_auth_headers(generation=1234,
+                                           keys_changed_at=1234,
+                                           client_state='aaaa')
+>       res = self.app.get('/1.0/xXx/token', headers=headers, status=404)
+
+tools/integration_tests/tokenserver/test_misc.py:24: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:328: in get
+    return self.do_request(req, status=status,
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:653: in do_request
+    self._check_status(status, res)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <webtest.app.TestApp object at 0x7f0f44600eb0>, status = 404
+res = <401 Unauthorized application/json body=b'{"status..."}]}'/102>
+
+    def _check_status(self, status, res):
+        if status == '*':
+            return
+        res_status = res.status
+        if (isinstance(status, str) and '*' in status):
+            if re.match(fnmatch.translate(status), res_status, re.I):
+                return
+        if isinstance(status, str):
+            if status == res_status:
+                return
+        if isinstance(status, (list, tuple)):
+            if res.status_int not in status:
+                raise AppError(
+                    "Bad response: %s (not one of %s for %s)\n%s",
+                    res_status, ', '.join(map(str, status)),
+                    res.request.url, res)
+            return
+        if status is None:
+            if res.status_int >= 200 and res.status_int < 400:
+                return
+            raise AppError(
+                "Bad response: %s (not 200 OK or 3xx redirect for %s)\n%s",
+                res_status, res.request.url,
+                res)
+        if status != res.status_int:
+>           raise AppError(
+                "Bad response: %s (not %s)\n%s", res_status, status, res)
+E           webtest.app.AppError: Bad response: 401 Unauthorized (not 404)
+E           b'{"status":"invalid-credentials","errors":[{"location":"body","name":"","description":"Unauthorized"}]}'
+
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:687: AppError
+________________________ TestMisc.test_unknown_version _________________________
+
+self = <tokenserver.test_misc.TestMisc testMethod=test_unknown_version>
+
+    def test_unknown_version(self):
+        headers = self._build_auth_headers(generation=1234,
+                                           keys_changed_at=1234,
+                                           client_state='aaaa')
+>       res = self.app.get('/1.0/sync/1.2', headers=headers, status=404)
+
+tools/integration_tests/tokenserver/test_misc.py:41: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:328: in get
+    return self.do_request(req, status=status,
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:653: in do_request
+    self._check_status(status, res)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <webtest.app.TestApp object at 0x7f0f446520a0>, status = 404
+res = <401 Unauthorized application/json body=b'{"status..."}]}'/102>
+
+    def _check_status(self, status, res):
+        if status == '*':
+            return
+        res_status = res.status
+        if (isinstance(status, str) and '*' in status):
+            if re.match(fnmatch.translate(status), res_status, re.I):
+                return
+        if isinstance(status, str):
+            if status == res_status:
+                return
+        if isinstance(status, (list, tuple)):
+            if res.status_int not in status:
+                raise AppError(
+                    "Bad response: %s (not one of %s for %s)\n%s",
+                    res_status, ', '.join(map(str, status)),
+                    res.request.url, res)
+            return
+        if status is None:
+            if res.status_int >= 200 and res.status_int < 400:
+                return
+            raise AppError(
+                "Bad response: %s (not 200 OK or 3xx redirect for %s)\n%s",
+                res_status, res.request.url,
+                res)
+        if status != res.status_int:
+>           raise AppError(
+                "Bad response: %s (not %s)\n%s", res_status, status, res)
+E           webtest.app.AppError: Bad response: 401 Unauthorized (not 404)
+E           b'{"status":"invalid-credentials","errors":[{"location":"body","name":"","description":"Unauthorized"}]}'
+
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:687: AppError
+________ TestMisc.test_user_creation_when_most_current_user_is_replaced ________
+
+self = <tokenserver.test_misc.TestMisc testMethod=test_user_creation_when_most_current_user_is_replaced>
+
+    def test_user_creation_when_most_current_user_is_replaced(self):
+        # Add some users
+        uid1 = self._add_user(generation=1234, created_at=1234)
+        uid2 = self._add_user(generation=1235, created_at=1235)
+        uid3 = self._add_user(generation=1236, created_at=1236,
+                              replaced_at=1237)
+        seen_uids = [uid1, uid2, uid3]
+        # Because the current user (the one with uid3) has been replaced, a new
+        # user record is created
+        headers = self._build_auth_headers(generation=1237,
+                                           keys_changed_at=1237,
+                                           client_state='aaaa')
+>       res = self.app.get('/1.0/sync/1.5', headers=headers)
+
+tools/integration_tests/tokenserver/test_misc.py:90: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:328: in get
+    return self.do_request(req, status=status,
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:653: in do_request
+    self._check_status(status, res)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <webtest.app.TestApp object at 0x7f0f44775520>, status = None
+res = <401 Unauthorized application/json body=b'{"status..."}]}'/102>
+
+    def _check_status(self, status, res):
+        if status == '*':
+            return
+        res_status = res.status
+        if (isinstance(status, str) and '*' in status):
+            if re.match(fnmatch.translate(status), res_status, re.I):
+                return
+        if isinstance(status, str):
+            if status == res_status:
+                return
+        if isinstance(status, (list, tuple)):
+            if res.status_int not in status:
+                raise AppError(
+                    "Bad response: %s (not one of %s for %s)\n%s",
+                    res_status, ', '.join(map(str, status)),
+                    res.request.url, res)
+            return
+        if status is None:
+            if res.status_int >= 200 and res.status_int < 400:
+                return
+>           raise AppError(
+                "Bad response: %s (not 200 OK or 3xx redirect for %s)\n%s",
+                res_status, res.request.url,
+                res)
+E           webtest.app.AppError: Bad response: 401 Unauthorized (not 200 OK or 3xx redirect for http://localhost:8000/1.0/sync/1.5)
+E           b'{"status":"invalid-credentials","errors":[{"location":"body","name":"","description":"Unauthorized"}]}'
+
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:682: AppError
+_______________ TestMisc.test_user_updates_with_new_client_state _______________
+
+self = <tokenserver.test_misc.TestMisc testMethod=test_user_updates_with_new_client_state>
+
+    def test_user_updates_with_new_client_state(self):
+        # Start with a single user in the database
+        uid = self._add_user(generation=1234, keys_changed_at=1234,
+                             client_state='aaaa')
+        # Send a request, updating the generation, keys_changed_at, and
+        # client_state
+        headers = self._build_auth_headers(generation=1235,
+                                           keys_changed_at=1235,
+                                           client_state='bbbb')
+>       res = self.app.get('/1.0/sync/1.5', headers=headers)
+
+tools/integration_tests/tokenserver/test_misc.py:121: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:328: in get
+    return self.do_request(req, status=status,
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:653: in do_request
+    self._check_status(status, res)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <webtest.app.TestApp object at 0x7f0f44213cd0>, status = None
+res = <401 Unauthorized application/json body=b'{"status..."}]}'/102>
+
+    def _check_status(self, status, res):
+        if status == '*':
+            return
+        res_status = res.status
+        if (isinstance(status, str) and '*' in status):
+            if re.match(fnmatch.translate(status), res_status, re.I):
+                return
+        if isinstance(status, str):
+            if status == res_status:
+                return
+        if isinstance(status, (list, tuple)):
+            if res.status_int not in status:
+                raise AppError(
+                    "Bad response: %s (not one of %s for %s)\n%s",
+                    res_status, ', '.join(map(str, status)),
+                    res.request.url, res)
+            return
+        if status is None:
+            if res.status_int >= 200 and res.status_int < 400:
+                return
+>           raise AppError(
+                "Bad response: %s (not 200 OK or 3xx redirect for %s)\n%s",
+                res_status, res.request.url,
+                res)
+E           webtest.app.AppError: Bad response: 401 Unauthorized (not 200 OK or 3xx redirect for http://localhost:8000/1.0/sync/1.5)
+E           b'{"status":"invalid-credentials","errors":[{"location":"body","name":"","description":"Unauthorized"}]}'
+
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:682: AppError
+______________ TestMisc.test_user_updates_with_same_client_state _______________
+
+self = <tokenserver.test_misc.TestMisc testMethod=test_user_updates_with_same_client_state>
+
+    def test_user_updates_with_same_client_state(self):
+        # Start with a single user in the database
+        uid = self._add_user(generation=1234, keys_changed_at=1234)
+        # Send a request, updating the generation and keys_changed_at but not
+        # the client state
+        headers = self._build_auth_headers(generation=1235,
+                                           keys_changed_at=1235,
+                                           client_state='aaaa')
+>       res = self.app.get('/1.0/sync/1.5', headers=headers)
+
+tools/integration_tests/tokenserver/test_misc.py:157: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:328: in get
+    return self.do_request(req, status=status,
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:653: in do_request
+    self._check_status(status, res)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <webtest.app.TestApp object at 0x7f0f44675670>, status = None
+res = <401 Unauthorized application/json body=b'{"status..."}]}'/102>
+
+    def _check_status(self, status, res):
+        if status == '*':
+            return
+        res_status = res.status
+        if (isinstance(status, str) and '*' in status):
+            if re.match(fnmatch.translate(status), res_status, re.I):
+                return
+        if isinstance(status, str):
+            if status == res_status:
+                return
+        if isinstance(status, (list, tuple)):
+            if res.status_int not in status:
+                raise AppError(
+                    "Bad response: %s (not one of %s for %s)\n%s",
+                    res_status, ', '.join(map(str, status)),
+                    res.request.url, res)
+            return
+        if status is None:
+            if res.status_int >= 200 and res.status_int < 400:
+                return
+>           raise AppError(
+                "Bad response: %s (not 200 OK or 3xx redirect for %s)\n%s",
+                res_status, res.request.url,
+                res)
+E           webtest.app.AppError: Bad response: 401 Unauthorized (not 200 OK or 3xx redirect for http://localhost:8000/1.0/sync/1.5)
+E           b'{"status":"invalid-credentials","errors":[{"location":"body","name":"","description":"Unauthorized"}]}'
+
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:682: AppError
+___________________________ TestMisc.test_valid_app ____________________________
+
+self = <tokenserver.test_misc.TestMisc testMethod=test_valid_app>
+
+    def test_valid_app(self):
+        self._add_user()
+        headers = self._build_auth_headers(generation=1234,
+                                           keys_changed_at=1234,
+                                           client_state='aaaa')
+>       res = self.app.get('/1.0/sync/1.5', headers=headers)
+
+tools/integration_tests/tokenserver/test_misc.py:59: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:328: in get
+    return self.do_request(req, status=status,
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:653: in do_request
+    self._check_status(status, res)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <webtest.app.TestApp object at 0x7f0f44b6acd0>, status = None
+res = <401 Unauthorized application/json body=b'{"status..."}]}'/102>
+
+    def _check_status(self, status, res):
+        if status == '*':
+            return
+        res_status = res.status
+        if (isinstance(status, str) and '*' in status):
+            if re.match(fnmatch.translate(status), res_status, re.I):
+                return
+        if isinstance(status, str):
+            if status == res_status:
+                return
+        if isinstance(status, (list, tuple)):
+            if res.status_int not in status:
+                raise AppError(
+                    "Bad response: %s (not one of %s for %s)\n%s",
+                    res_status, ', '.join(map(str, status)),
+                    res.request.url, res)
+            return
+        if status is None:
+            if res.status_int >= 200 and res.status_int < 400:
+                return
+>           raise AppError(
+                "Bad response: %s (not 200 OK or 3xx redirect for %s)\n%s",
+                res_status, res.request.url,
+                res)
+E           webtest.app.AppError: Bad response: 401 Unauthorized (not 200 OK or 3xx redirect for http://localhost:8000/1.0/sync/1.5)
+E           b'{"status":"invalid-credentials","errors":[{"location":"body","name":"","description":"Unauthorized"}]}'
+
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:682: AppError
+_____________________ TestMisc.test_x_content_type_options _____________________
+
+self = <tokenserver.test_misc.TestMisc testMethod=test_x_content_type_options>
+
+    def test_x_content_type_options(self):
+        self._add_user(generation=1234,
+                       keys_changed_at=1234,
+                       client_state='aaaa')
+        headers = self._build_auth_headers(generation=1234,
+                                           keys_changed_at=1234,
+                                           client_state='aaaa')
+>       res = self.app.get('/1.0/sync/1.5', headers=headers)
+
+tools/integration_tests/tokenserver/test_misc.py:233: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:328: in get
+    return self.do_request(req, status=status,
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:653: in do_request
+    self._check_status(status, res)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <webtest.app.TestApp object at 0x7f0f442778b0>, status = None
+res = <401 Unauthorized application/json body=b'{"status..."}]}'/102>
+
+    def _check_status(self, status, res):
+        if status == '*':
+            return
+        res_status = res.status
+        if (isinstance(status, str) and '*' in status):
+            if re.match(fnmatch.translate(status), res_status, re.I):
+                return
+        if isinstance(status, str):
+            if status == res_status:
+                return
+        if isinstance(status, (list, tuple)):
+            if res.status_int not in status:
+                raise AppError(
+                    "Bad response: %s (not one of %s for %s)\n%s",
+                    res_status, ', '.join(map(str, status)),
+                    res.request.url, res)
+            return
+        if status is None:
+            if res.status_int >= 200 and res.status_int < 400:
+                return
+>           raise AppError(
+                "Bad response: %s (not 200 OK or 3xx redirect for %s)\n%s",
+                res_status, res.request.url,
+                res)
+E           webtest.app.AppError: Bad response: 401 Unauthorized (not 200 OK or 3xx redirect for http://localhost:8000/1.0/sync/1.5)
+E           b'{"status":"invalid-credentials","errors":[{"location":"body","name":"","description":"Unauthorized"}]}'
+
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:682: AppError
+_________________ TestNodeAssignment.test_new_user_allocation __________________
+
+self = <tokenserver.test_node_assignment.TestNodeAssignment testMethod=test_new_user_allocation>
+
+    def test_new_user_allocation(self):
+        # Start with a clean database
+        cursor = self._execute_sql('DELETE FROM nodes', ())
+        cursor.close()
+    
+        self._add_node(available=100, current_load=0, capacity=100, backoff=1,
+                       node='https://node1')
+        self._add_node(available=100, current_load=0, capacity=100, downed=1,
+                       node='https://node2')
+        node_id = self._add_node(available=99, current_load=1, capacity=100,
+                                 node='https://node3')
+        self._add_node(available=98, current_load=2, capacity=100,
+                       node='https://node4')
+        self._add_node(available=97, current_load=3, capacity=100,
+                       node='https://node5')
+        headers = self._build_auth_headers(generation=1234,
+                                           keys_changed_at=1234,
+                                           client_state='aaaa')
+>       res = self.app.get('/1.0/sync/1.5', headers=headers)
+
+tools/integration_tests/tokenserver/test_node_assignment.py:65: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:328: in get
+    return self.do_request(req, status=status,
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:653: in do_request
+    self._check_status(status, res)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <webtest.app.TestApp object at 0x7f0f44468940>, status = None
+res = <401 Unauthorized application/json body=b'{"status..."}]}'/102>
+
+    def _check_status(self, status, res):
+        if status == '*':
+            return
+        res_status = res.status
+        if (isinstance(status, str) and '*' in status):
+            if re.match(fnmatch.translate(status), res_status, re.I):
+                return
+        if isinstance(status, str):
+            if status == res_status:
+                return
+        if isinstance(status, (list, tuple)):
+            if res.status_int not in status:
+                raise AppError(
+                    "Bad response: %s (not one of %s for %s)\n%s",
+                    res_status, ', '.join(map(str, status)),
+                    res.request.url, res)
+            return
+        if status is None:
+            if res.status_int >= 200 and res.status_int < 400:
+                return
+>           raise AppError(
+                "Bad response: %s (not 200 OK or 3xx redirect for %s)\n%s",
+                res_status, res.request.url,
+                res)
+E           webtest.app.AppError: Bad response: 401 Unauthorized (not 200 OK or 3xx redirect for http://localhost:8000/1.0/sync/1.5)
+E           b'{"status":"invalid-credentials","errors":[{"location":"body","name":"","description":"Unauthorized"}]}'
+
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:682: AppError
+_________ TestNodeAssignment.test_successfully_releasing_node_capacity _________
+
+self = <tokenserver.test_node_assignment.TestNodeAssignment testMethod=test_successfully_releasing_node_capacity>
+
+    def test_successfully_releasing_node_capacity(self):
+        # Start with a clean database
+        cursor = self._execute_sql('DELETE FROM nodes', ())
+        cursor.close()
+    
+        node_id1 = self._add_node(available=0, current_load=99, capacity=100,
+                                  node='https://node1')
+        node_id2 = self._add_node(available=0, current_load=90, capacity=100,
+                                  node='https://node2')
+        node_id3 = self._add_node(available=0, current_load=80, capacity=81,
+                                  node='https://node3')
+        node_id4 = self._add_node(available=0, current_load=70, capacity=71,
+                                  node='https://node4', backoff=1)
+        node_id5 = self._add_node(available=0, current_load=60, capacity=61,
+                                  node='https://node5', downed=1)
+        headers = self._build_auth_headers(generation=1234,
+                                           keys_changed_at=1234,
+                                           client_state='aaaa')
+>       res = self.app.get('/1.0/sync/1.5', headers=headers)
+
+tools/integration_tests/tokenserver/test_node_assignment.py:95: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:328: in get
+    return self.do_request(req, status=status,
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:653: in do_request
+    self._check_status(status, res)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <webtest.app.TestApp object at 0x7f0f4428dd60>, status = None
+res = <401 Unauthorized application/json body=b'{"status..."}]}'/102>
+
+    def _check_status(self, status, res):
+        if status == '*':
+            return
+        res_status = res.status
+        if (isinstance(status, str) and '*' in status):
+            if re.match(fnmatch.translate(status), res_status, re.I):
+                return
+        if isinstance(status, str):
+            if status == res_status:
+                return
+        if isinstance(status, (list, tuple)):
+            if res.status_int not in status:
+                raise AppError(
+                    "Bad response: %s (not one of %s for %s)\n%s",
+                    res_status, ', '.join(map(str, status)),
+                    res.request.url, res)
+            return
+        if status is None:
+            if res.status_int >= 200 and res.status_int < 400:
+                return
+>           raise AppError(
+                "Bad response: %s (not 200 OK or 3xx redirect for %s)\n%s",
+                res_status, res.request.url,
+                res)
+E           webtest.app.AppError: Bad response: 401 Unauthorized (not 200 OK or 3xx redirect for http://localhost:8000/1.0/sync/1.5)
+E           b'{"status":"invalid-credentials","errors":[{"location":"body","name":"","description":"Unauthorized"}]}'
+
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:682: AppError
+________ TestNodeAssignment.test_unsuccessfully_releasing_node_capacity ________
+
+self = <tokenserver.test_node_assignment.TestNodeAssignment testMethod=test_unsuccessfully_releasing_node_capacity>
+
+    def test_unsuccessfully_releasing_node_capacity(self):
+        # Start with a clean database
+        cursor = self._execute_sql('DELETE FROM nodes', ())
+        cursor.close()
+    
+        self._add_node(available=0, current_load=100, capacity=100,
+                       node='https://node1')
+        self._add_node(available=0, current_load=90, capacity=90,
+                       node='https://node2')
+        self._add_node(available=0, current_load=80, capacity=80,
+                       node='https://node3')
+        headers = self._build_auth_headers(generation=1234,
+                                           keys_changed_at=1234,
+                                           client_state='aaaa')
+        # All of these nodes are completely full, and no capacity can be
+        # released
+>       res = self.app.get('/1.0/sync/1.5', headers=headers, status=503)
+
+tools/integration_tests/tokenserver/test_node_assignment.py:136: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:328: in get
+    return self.do_request(req, status=status,
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:653: in do_request
+    self._check_status(status, res)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <webtest.app.TestApp object at 0x7f0f44a2bb80>, status = 503
+res = <401 Unauthorized application/json body=b'{"status..."}]}'/102>
+
+    def _check_status(self, status, res):
+        if status == '*':
+            return
+        res_status = res.status
+        if (isinstance(status, str) and '*' in status):
+            if re.match(fnmatch.translate(status), res_status, re.I):
+                return
+        if isinstance(status, str):
+            if status == res_status:
+                return
+        if isinstance(status, (list, tuple)):
+            if res.status_int not in status:
+                raise AppError(
+                    "Bad response: %s (not one of %s for %s)\n%s",
+                    res_status, ', '.join(map(str, status)),
+                    res.request.url, res)
+            return
+        if status is None:
+            if res.status_int >= 200 and res.status_int < 400:
+                return
+            raise AppError(
+                "Bad response: %s (not 200 OK or 3xx redirect for %s)\n%s",
+                res_status, res.request.url,
+                res)
+        if status != res.status_int:
+>           raise AppError(
+                "Bad response: %s (not %s)\n%s", res_status, status, res)
+E           webtest.app.AppError: Bad response: 401 Unauthorized (not 503)
+E           b'{"status":"invalid-credentials","errors":[{"location":"body","name":"","description":"Unauthorized"}]}'
+
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:687: AppError
+____________________ TestNodeAssignment.test_user_creation _____________________
+
+self = <tokenserver.test_node_assignment.TestNodeAssignment testMethod=test_user_creation>
+
+    def test_user_creation(self):
+        # Add a few more nodes
+        self._add_node(available=0, node='https://node1')
+        self._add_node(available=1, node='https://node2')
+        self._add_node(available=5, node='https://node3')
+        # Send a request from an unseen user
+        headers = self._build_auth_headers(generation=1234,
+                                           keys_changed_at=1234,
+                                           client_state='aaaa')
+>       res = self.app.get('/1.0/sync/1.5', headers=headers)
+
+tools/integration_tests/tokenserver/test_node_assignment.py:27: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:328: in get
+    return self.do_request(req, status=status,
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:653: in do_request
+    self._check_status(status, res)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <webtest.app.TestApp object at 0x7f0f4463de80>, status = None
+res = <401 Unauthorized application/json body=b'{"status..."}]}'/102>
+
+    def _check_status(self, status, res):
+        if status == '*':
+            return
+        res_status = res.status
+        if (isinstance(status, str) and '*' in status):
+            if re.match(fnmatch.translate(status), res_status, re.I):
+                return
+        if isinstance(status, str):
+            if status == res_status:
+                return
+        if isinstance(status, (list, tuple)):
+            if res.status_int not in status:
+                raise AppError(
+                    "Bad response: %s (not one of %s for %s)\n%s",
+                    res_status, ', '.join(map(str, status)),
+                    res.request.url, res)
+            return
+        if status is None:
+            if res.status_int >= 200 and res.status_int < 400:
+                return
+>           raise AppError(
+                "Bad response: %s (not 200 OK or 3xx redirect for %s)\n%s",
+                res_status, res.request.url,
+                res)
+E           webtest.app.AppError: Bad response: 401 Unauthorized (not 200 OK or 3xx redirect for http://localhost:8000/1.0/sync/1.5)
+E           b'{"status":"invalid-credentials","errors":[{"location":"body","name":"","description":"Unauthorized"}]}'
+
+/usr/local/lib/python3.9/dist-packages/webtest/app.py:682: AppError
+=============================== warnings summary ===============================
+../usr/local/lib/python3.9/dist-packages/pyramid_hawkauth/__init__.py:26
+  /usr/local/lib/python3.9/dist-packages/pyramid_hawkauth/__init__.py:26: DeprecationWarning: Everyone: "pyramid.security.Everyone" is deprecated in Pyramid 2.0. Adjust your import to "pyramid.authorization.Everyone"
+    from pyramid.security import Everyone, Authenticated
+
+../usr/local/lib/python3.9/dist-packages/pyramid_hawkauth/__init__.py:26
+  /usr/local/lib/python3.9/dist-packages/pyramid_hawkauth/__init__.py:26: DeprecationWarning: Authenticated: "pyramid.security.Authenticated" is deprecated in Pyramid 2.0. Adjust your import to "pyramid.authorization.Authenticated"
+    from pyramid.security import Everyone, Authenticated
+
+tools/integration_tests/test_storage.py: 63 warnings
+  /app/tools/integration_tests/test_support.py:182: DeprecationWarning: Authentication and authorization policies have been deprecated in favor of security policies.  See "Upgrading Authentication/Authorization" in "What's New in Pyramid 2.0" of the documentation for more information.
+    config.set_authorization_policy(authz_policy)
+
+tools/integration_tests/test_storage.py: 63 warnings
+  /app/tools/integration_tests/test_support.py:186: DeprecationWarning: Authentication and authorization policies have been deprecated in favor of security policies.  See "Upgrading Authentication/Authorization" in "What's New in Pyramid 2.0" of the documentation for more information.
+    config.set_authentication_policy(authn_policy)
+
+tools/integration_tests/tokenserver/test_authorization.py::TestAuthorization::test_client_specified_duration
+  /app/tools/integration_tests/tokenserver/test_support.py:292: RemovedIn20Warning: Deprecated API features detected! These feature(s) are not compatible with SQLAlchemy 2.0. To prevent incompatible upgrades prior to updating applications, ensure requirements files are pinned to "sqlalchemy<2.0". Set environment variable SQLALCHEMY_WARN_20=1 to show all deprecation warnings.  Set environment variable SQLALCHEMY_SILENCE_UBER_WARNING=1 to silence this message. (Background on SQLAlchemy 2.0 at: https://sqlalche.me/e/b8d9)
+    cursor = self.database.execute(query, args)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+---------- generated xml file: /mysql_no_jwk_integration_results.xml -----------
+=========================== short test summary info ============================
+FAILED tools/integration_tests/tokenserver/test_authorization.py::TestAuthorization::test_client_specified_duration
+FAILED tools/integration_tests/tokenserver/test_authorization.py::TestAuthorization::test_disallow_reusing_old_client_state
+FAILED tools/integration_tests/tokenserver/test_authorization.py::TestAuthorization::test_fxa_kid_change
+FAILED tools/integration_tests/tokenserver/test_authorization.py::TestAuthorization::test_generation_change_must_accompany_client_state_change
+FAILED tools/integration_tests/tokenserver/test_authorization.py::TestAuthorization::test_generation_must_not_be_less_than_last_seen_value
+FAILED tools/integration_tests/tokenserver/test_authorization.py::TestAuthorization::test_invalid_client_state_in_x_client_state
+FAILED tools/integration_tests/tokenserver/test_authorization.py::TestAuthorization::test_keys_changed_at_change_must_accompany_client_state_change
+FAILED tools/integration_tests/tokenserver/test_authorization.py::TestAuthorization::test_keys_changed_at_less_than_equal_to_generation
+FAILED tools/integration_tests/tokenserver/test_authorization.py::TestAuthorization::test_kid_change_during_gradual_tokenserver_rollout
+FAILED tools/integration_tests/tokenserver/test_authorization.py::TestAuthorization::test_set_generation_from_no_generation
+FAILED tools/integration_tests/tokenserver/test_authorization.py::TestAuthorization::test_set_generation_unchanged_without_keys_changed_at_update
+FAILED tools/integration_tests/tokenserver/test_authorization.py::TestAuthorization::test_set_generation_with_keys_changed_at_initialization
+FAILED tools/integration_tests/tokenserver/test_authorization.py::TestAuthorization::test_set_keys_changed_at_from_no_keys_changed_at
+FAILED tools/integration_tests/tokenserver/test_authorization.py::TestAuthorization::test_update_client_state
+FAILED tools/integration_tests/tokenserver/test_authorization.py::TestAuthorization::test_x_client_state_must_have_same_client_state_as_key_id
+FAILED tools/integration_tests/tokenserver/test_authorization.py::TestAuthorization::test_zero_generation_treated_as_null
+FAILED tools/integration_tests/tokenserver/test_authorization.py::TestAuthorization::test_zero_keys_changed_at_treated_as_null
+FAILED tools/integration_tests/tokenserver/test_e2e.py::TestE2e::test_valid_oauth_request
+FAILED tools/integration_tests/tokenserver/test_misc.py::TestMisc::test_current_user_is_the_most_up_to_date
+FAILED tools/integration_tests/tokenserver/test_misc.py::TestMisc::test_old_users_marked_as_replaced_in_race_recovery
+FAILED tools/integration_tests/tokenserver/test_misc.py::TestMisc::test_replaced_users_can_make_requests
+FAILED tools/integration_tests/tokenserver/test_misc.py::TestMisc::test_replaced_users_with_no_node_can_make_requests
+FAILED tools/integration_tests/tokenserver/test_misc.py::TestMisc::test_retired_users_can_make_requests
+FAILED tools/integration_tests/tokenserver/test_misc.py::TestMisc::test_retired_users_with_no_node_cannot_make_requests
+FAILED tools/integration_tests/tokenserver/test_misc.py::TestMisc::test_unknown_app
+FAILED tools/integration_tests/tokenserver/test_misc.py::TestMisc::test_unknown_version
+FAILED tools/integration_tests/tokenserver/test_misc.py::TestMisc::test_user_creation_when_most_current_user_is_replaced
+FAILED tools/integration_tests/tokenserver/test_misc.py::TestMisc::test_user_updates_with_new_client_state
+FAILED tools/integration_tests/tokenserver/test_misc.py::TestMisc::test_user_updates_with_same_client_state
+FAILED tools/integration_tests/tokenserver/test_misc.py::TestMisc::test_valid_app
+FAILED tools/integration_tests/tokenserver/test_misc.py::TestMisc::test_x_content_type_options
+FAILED tools/integration_tests/tokenserver/test_node_assignment.py::TestNodeAssignment::test_new_user_allocation
+FAILED tools/integration_tests/tokenserver/test_node_assignment.py::TestNodeAssignment::test_successfully_releasing_node_capacity
+FAILED tools/integration_tests/tokenserver/test_node_assignment.py::TestNodeAssignment::test_unsuccessfully_releasing_node_capacity
+FAILED tools/integration_tests/tokenserver/test_node_assignment.py::TestNodeAssignment::test_user_creation
+=========== 35 failed, 66 passed, 1 skipped, 129 warnings in 26.45s ============

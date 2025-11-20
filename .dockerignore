@@ -11,3 +11,16 @@ README.md
 target
 tools/examples
 db/
+# Additional exclusions for faster builds
+.pytest_cache
+__pycache__
+*.pyc
+*.pyo
+.coverage
+.env
+.vscode
+.idea
+*.log
+*.tmp
+.DS_Store
+node_modules

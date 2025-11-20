@@ -51,7 +51,7 @@ syncstorage-db = { path = "../syncstorage-db" }
 syncstorage-settings = { path = "../syncstorage-settings" }
 time = "^0.3"
 tokenserver-auth = { path = "../tokenserver-auth", default-features = false }
-tokenserver-common = { path = "../tokenserver-common" }
+tokenserver-common = { path = "../tokenserver-common", default-features = false }
 tokenserver-db = { path = "../tokenserver-db" }
 tokenserver-settings = { path = "../tokenserver-settings" }
 tokio = { workspace = true, features = ["macros", "sync"] }
@@ -63,6 +63,7 @@ woothee = "0.13"
 [features]
 default = ["mysql", "py_verifier"]
 no_auth = []
-py_verifier = ["tokenserver-auth/py"]
+py_verifier = ["tokenserver-auth/py", "tokenserver-common/py"]
+keycloak = ["tokenserver-auth/keycloak"]
 mysql = ["syncstorage-db/mysql"]
 spanner = ["syncstorage-db/spanner"]

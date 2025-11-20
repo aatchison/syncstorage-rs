@@ -10,6 +10,8 @@ use syncserver_common::Metrics;
 use tokenserver_common::TokenserverError;
 use tokenserver_settings::Settings;
 
+
+
 const SYNC_SCOPE: &str = "https://identity.mozilla.com/apps/oldsync";
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -18,12 +20,29 @@ struct TokenClaims {
     user: String,
     scope: String,
     #[serde(rename = "fxa-generation")]
-    generation: Option<i64>,
+    fxa_generation: Option<i64>,
+    // OIDC standard claims
+    #[serde(rename = "iat")]
+    issued_at: Option<i64>,
+    // Legacy field for backward compatibility with tests
+    #[serde(default)]
+    generation: Option<u64>,
 }
 
 impl TokenClaims {
+    /// Get the generation value, preferring FxA-specific generation over OIDC issued_at or legacy generation
+    fn get_generation(&self) -> Option<i64> {
+        self.fxa_generation
+            .or(self.issued_at)
+            .or(self.generation.map(|g| g as i64))
+    }
+
     fn validate(self) -> Result<VerifyOutput, TokenserverError> {
-        if !self.scope.split(',').any(|scope| scope == SYNC_SCOPE) {
+        // Check for sync scope in both comma-separated and space-separated formats
+        let has_sync_scope = self.scope.split(',').any(|scope| scope.trim() == SYNC_SCOPE)
+            || self.scope.split(' ').any(|scope| scope.trim() == SYNC_SCOPE);
+        
+        if !has_sync_scope {
             return Err(TokenserverError::invalid_credentials(
                 "Unauthorized".to_string(),
             ));
@@ -34,9 +53,10 @@ impl TokenClaims {
 
 impl From<TokenClaims> for VerifyOutput {
     fn from(value: TokenClaims) -> Self {
+        let generation = value.get_generation();
         Self {
             fxa_uid: value.user,
-            generation: value.generation,
+            generation,
         }
     }
 }
@@ -48,6 +68,7 @@ pub struct Verifier<J> {
     jwks_url: Url,
     jwk_verifiers: Vec<J>,
     http_client: reqwest::Client,
+    provider_type: String,
 }
 
 impl<J> Verifier<J>
@@ -55,14 +76,34 @@ where
     J: JWTVerifier,
 {
     pub fn new(settings: &Settings, jwk_verifiers: Vec<J>) -> Result<Self, TokenserverError> {
-        let base_url = Url::parse(&settings.fxa_oauth_server_url)
-            .map_err(|_| TokenserverError::internal_error())?;
-        let verify_url = base_url
-            .join("v1/verify")
-            .map_err(|_| TokenserverError::internal_error())?;
-        let jwks_url = base_url
-            .join("v1/jwks")
-            .map_err(|_| TokenserverError::internal_error())?;
+        let (verify_url, jwks_url) = if settings.oauth_provider_type == "oidc" {
+            // For OIDC providers like Keycloak
+            let base_url = settings.oidc_issuer_url.as_ref()
+                .unwrap_or(&settings.fxa_oauth_server_url);
+            let base_url = Url::parse(base_url)
+                .map_err(|_| TokenserverError::internal_error())?;
+            
+            // OIDC doesn't have a verify endpoint - we'll use JWT verification only
+            let verify_url = base_url.clone(); // Placeholder, won't be used
+            let jwks_url = base_url
+                .join("protocol/openid-connect/certs")
+                .map_err(|_| TokenserverError::internal_error())?;
+            
+            (verify_url, jwks_url)
+        } else {
+            // For FxA
+            let base_url = Url::parse(&settings.fxa_oauth_server_url)
+                .map_err(|_| TokenserverError::internal_error())?;
+            let verify_url = base_url
+                .join("v1/verify")
+                .map_err(|_| TokenserverError::internal_error())?;
+            let jwks_url = base_url
+                .join("v1/jwks")
+                .map_err(|_| TokenserverError::internal_error())?;
+            
+            (verify_url, jwks_url)
+        };
+
         let http_client = reqwest::Client::builder()
             .timeout(Duration::from_secs(settings.fxa_oauth_request_timeout))
             .use_rustls_tls()
@@ -74,8 +115,11 @@ where
             jwks_url,
             jwk_verifiers,
             http_client,
+            provider_type: settings.oauth_provider_type.clone(),
         })
     }
+
+
 
     async fn remote_verify_token(&self, token: &str) -> Result<TokenClaims, TokenserverError> {
         #[derive(Serialize)]
@@ -95,7 +139,9 @@ where
                 Self {
                     user: value.user,
                     scope: value.scope.join(","),
-                    generation: value.generation,
+                    fxa_generation: value.generation,
+                    issued_at: None,
+                    generation: value.generation.map(|g| g as u64),
                 }
             }
         }
@@ -193,6 +239,8 @@ where
         token: String,
         metrics: &Metrics,
     ) -> Result<VerifyOutput, TokenserverError> {
+
+
         let mut verifiers = self
             .jwk_verifiers
             .iter()
@@ -219,6 +267,10 @@ where
                 }
                 match e {
                     OAuthVerifyError::DecodingError | OAuthVerifyError::InvalidKey => {
+                        // For OIDC providers, don't fall back to remote verification
+                        if self.provider_type == "oidc" {
+                            return Err(unauthorized_err_with_ctx(e));
+                        }
                         self.remote_verify_token(&token).await?
                     }
                     e => return Err(unauthorized_err_with_ctx(e)),
@@ -242,6 +294,8 @@ fn internal_err_with_ctx<E: std::fmt::Display>(err: E) -> TokenserverError {
         ..TokenserverError::internal_error()
     }
 }
+
+
 
 #[cfg(test)]
 mod tests {

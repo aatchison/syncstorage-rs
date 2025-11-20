@@ -8,6 +8,7 @@ import os
 import math
 import time
 import urllib.parse as urlparse
+import requests
 
 from sqlalchemy import create_engine
 from tokenlib.utils import decode_token_bytes
@@ -68,32 +69,108 @@ class TestCase:
 
         self.database.close()
 
+    def _get_keycloak_token(self):
+        """Get a real JWT token from Keycloak for testing using client credentials"""
+        # Check if we're using OIDC/Keycloak
+        oauth_provider_type = os.environ.get('SYNC_TOKENSERVER__OAUTH_PROVIDER_TYPE', 'fxa')
+        if oauth_provider_type != 'oidc':
+            return None
+            
+        # Get Keycloak server URL from environment
+        keycloak_base_url = os.environ.get('SYNC_TOKENSERVER__OIDC_ISSUER_URL', 
+                                         os.environ.get('SYNC_TOKENSERVER__FXA_OAUTH_SERVER_URL'))
+        if not keycloak_base_url:
+            return None
+            
+        # Use the Keycloak URL as-is when running in Docker, or replace with localhost for local testing
+        # Check if we're running in Docker by looking for the KEYCLOAK_URL environment variable
+        if os.environ.get('KEYCLOAK_URL'):
+            # Running in Docker - use the internal hostname
+            token_url = f"{keycloak_base_url}/protocol/openid-connect/token"
+        else:
+            # Running locally - replace with localhost
+            keycloak_base_url = keycloak_base_url.replace('keycloak:7080', 'localhost:7080')
+            token_url = f"{keycloak_base_url}/protocol/openid-connect/token"
+        
+        # Use confidential client credentials
+        confidential_client_secret = "YcdeiCc742lOk17poGhWT51GTAWMnQMr"
+        
+        try:
+            data = {
+                'grant_type': 'client_credentials',
+                'client_id': 'confidential-client',
+                'scope': f'openid {DEFAULT_OAUTH_SCOPE}',
+                'client_secret': confidential_client_secret
+            }
+            
+            response = requests.post(token_url, data=data, timeout=10)
+            
+            if response.status_code == 200:
+                token = response.json().get('access_token')
+                return token
+            else:
+                print(f"Failed to get Keycloak token: {response.status_code} - {response.text}")
+                return None
+        except Exception as e:
+            print(f"Error getting Keycloak token: {e}")
+            return None
+
+    def _is_using_keycloak(self):
+        """Check if we're using Keycloak for OAuth instead of FxA"""
+        # First check if the OAuth provider type is explicitly set to OIDC
+        oauth_provider_type = os.environ.get('SYNC_TOKENSERVER__OAUTH_PROVIDER_TYPE', 'fxa')
+        if oauth_provider_type != 'oidc':
+            return False
+        
+        # If OIDC is configured, verify we can actually get a Keycloak token
+        return self._get_keycloak_token() is not None
+
     def _build_oauth_headers(self, generation=None, user='test',
                              keys_changed_at=None, client_state=None,
                              status=200, **additional_headers):
-        claims = {
-            'user': user,
-            'generation': generation,
-            'client_id': 'fake client id',
-            'scope': [DEFAULT_OAUTH_SCOPE],
-        }
+        # Try to get a real JWT token from Keycloak first
+        real_token = self._get_keycloak_token()
+        
+        print(f"DEBUG: _build_oauth_headers called with generation={generation}, using real_token={real_token is not None}")
+        
+        if real_token:
+            # Use real JWT token from Keycloak
+            headers = {}
+            headers['Authorization'] = f'Bearer {real_token}'
+            if client_state:
+                client_state = binascii.unhexlify(client_state)
+                client_state = b64encode(client_state).strip(b'=').decode('utf-8')
+                headers['X-KeyID'] = '%s-%s' % (keys_changed_at, client_state)
+            headers.update(additional_headers)
+            print(f"DEBUG: Using Keycloak token, headers: {headers}")
+            return headers
+        else:
+            # Fallback to fake token for FxA or when Keycloak is not available or when generation is needed
+            claims = {
+                'user': user,
+                'generation': generation,
+                'client_id': 'fake client id',
+                'scope': [DEFAULT_OAUTH_SCOPE],
+            }
 
-        if generation is not None:
-            claims['generation'] = generation
+            if generation is not None:
+                claims['generation'] = generation
 
-        body = {
-            'body': claims,
-            'status': status
-        }
+            body = {
+                'body': claims,
+                'status': status
+            }
 
-        headers = {}
-        headers['Authorization'] = 'Bearer %s' % json.dumps(body)
-        client_state = binascii.unhexlify(client_state)
-        client_state = b64encode(client_state).strip(b'=').decode('utf-8')
-        headers['X-KeyID'] = '%s-%s' % (keys_changed_at, client_state)
-        headers.update(additional_headers)
+            headers = {}
+            headers['Authorization'] = 'Bearer %s' % json.dumps(body)
+            if client_state:
+                client_state = binascii.unhexlify(client_state)
+                client_state = b64encode(client_state).strip(b'=').decode('utf-8')
+                headers['X-KeyID'] = '%s-%s' % (keys_changed_at, client_state)
+            headers.update(additional_headers)
 
-        return headers
+            print(f"DEBUG: Using fake token, body: {body}, headers: {headers}")
+            return headers
 
     def _add_node(self, capacity=100, available=100, node=NODE_URL, id=None,
                   current_load=0, backoff=0, downed=0):
@@ -155,9 +232,22 @@ class TestCase:
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s);
         '''
         created_at = created_at or math.trunc(time.time() * 1000)
+        
+        # Use the correct email format based on OAuth provider
+        if email is None:
+            oauth_provider_type = os.environ.get('SYNC_TOKENSERVER__OAUTH_PROVIDER_TYPE', 'fxa')
+            if oauth_provider_type == 'oidc':
+                # When using Keycloak OIDC, the JWT subject is a UUID and email is constructed as {uuid}@{domain}
+                # The service account UUID is fixed in our Keycloak configuration
+                keycloak_service_account_uuid = '468ee2d8-047a-497a-9247-f8e7056608a6'
+                email = f'{keycloak_service_account_uuid}@localhost'
+            else:
+                # Default FxA format
+                email = 'test@%s' % self.FXA_EMAIL_DOMAIN
+        
         cursor = self._execute_sql(query,
                                    (self.service_id,
-                                    email or 'test@%s' % self.FXA_EMAIL_DOMAIN,
+                                    email,
                                     generation, client_state,
                                     created_at, nodeid, keys_changed_at,
                                     replaced_at))

@@ -25,7 +25,7 @@ dyn-clone = "1.0.4"
 reqwest = { workspace = true, features = ["json"] }
 ring = "0.17"
 syncserver-common = { path = "../syncserver-common" }
-tokenserver-common = { path = "../tokenserver-common" }
+tokenserver-common = { path = "../tokenserver-common", default-features = false }
 tokenserver-settings = { path = "../tokenserver-settings" }
 tokio = { workspace = true }
 pyo3 = { version = "0.24", features = ["auto-initialize"], optional = true }
@@ -38,4 +38,5 @@ tokio = { workspace = true, features = ["macros"] }
 
 [features]
 default = ["py"]
-py = ["pyo3"]
+py = ["pyo3", "tokenserver-common/py"]
+keycloak = []

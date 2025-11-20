@@ -1,7 +1,7 @@
-#[cfg(not(feature = "py"))]
+#[cfg(any(not(feature = "py"), feature = "keycloak"))]
 mod crypto;
 
-#[cfg(not(feature = "py"))]
+#[cfg(any(not(feature = "py"), feature = "keycloak"))]
 pub use crypto::{JWTVerifier, JWTVerifierImpl};
 #[allow(clippy::result_large_err)]
 pub mod oauth;

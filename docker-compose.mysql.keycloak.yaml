@@ -1,0 +1,113 @@
+# NOTE: This docker-compose file was constructed to create a base for
+# use by the End-to-end tests. It has not been fully tested for use in
+# constructing a true, stand-alone sync server.
+# If you're interested in doing that, please join our community in the
+# github issues and comments.
+#
+# Application runs off of port 8000.
+# you can test if it's available with
+# curl "http://localhost:8000/__heartbeat__"
+
+version: "3"
+services:
+
+  sync-db:
+    image: docker.io/library/mysql:5.7
+    volumes:
+      - sync_db_data:/var/lib/mysql
+    restart: always
+    ports:
+      - "3306"
+    command: --explicit_defaults_for_timestamp
+    environment:
+      #MYSQL_RANDOM_ROOT_PASSWORD: yes
+      MYSQL_ROOT_PASSWORD: random
+      MYSQL_DATABASE: syncstorage
+      MYSQL_USER: test
+      MYSQL_PASSWORD: test
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin -uroot -p$${MYSQL_ROOT_PASSWORD} version"]
+      interval: 2s
+      retries: 10
+      start_period: 20s
+      timeout: 2s
+
+  tokenserver-db:
+    image: docker.io/library/mysql:5.7
+    volumes:
+      - tokenserver_db_data:/var/lib/mysql
+    restart: always
+    ports:
+      - "3306"
+    command: --explicit_defaults_for_timestamp
+    environment:
+      #MYSQL_RANDOM_ROOT_PASSWORD: yes
+      MYSQL_ROOT_PASSWORD: random
+      MYSQL_DATABASE: tokenserver
+      MYSQL_USER: test
+      MYSQL_PASSWORD: test
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin -uroot -p$${MYSQL_ROOT_PASSWORD} version"]
+      interval: 2s
+      retries: 10
+      start_period: 20s
+      timeout: 2s
+
+  syncserver:
+    # NOTE: The naming in the rest of this repository has been updated to reflect the fact
+    # that Syncstorage and Tokenserver are now part of one repository/server called
+    # "Syncserver" (updated from "syncstorage-rs"). We keep the legacy naming below for
+    # backwards compatibility with previous Docker images.
+    image: app:minimal
+    restart: always
+    ports:
+      - "8000:8000"
+    depends_on:
+      sync-db:
+        condition: service_healthy
+      tokenserver-db:
+        condition: service_healthy
+      keycloak:
+        condition: service_healthy
+    environment:
+      SYNC_HOST: 0.0.0.0
+      SYNC_MASTER_SECRET: secret0
+      SYNC_SYNCSTORAGE__DATABASE_URL: mysql://test:test@sync-db:3306/syncstorage
+      SYNC_TOKENSERVER__DATABASE_URL: mysql://test:test@tokenserver-db:3306/tokenserver
+      SYNC_TOKENSERVER__RUN_MIGRATIONS: "true"
+      SYNC_TOKENSERVER__ENABLED: "true"
+      SYNC_TOKENSERVER__OAUTH_PROVIDER_TYPE: "oidc"
+      SYNC_TOKENSERVER__OAUTH_PROVIDER: "keycloak"
+      SYNC_TOKENSERVER__OIDC_ISSUER_URL: "http://keycloak:7080/realms/sync"
+      SYNC_TOKENSERVER__FXA_OAUTH_SERVER_URL: "http://keycloak:7080/realms/sync"
+      SYNC_TOKENSERVER__KEYCLOAK_SERVER_URL: "http://keycloak:7080"
+      SYNC_TOKENSERVER__FXA_EMAIL_DOMAIN: "localhost"
+      SYNC_TOKENSERVER__FXA_METRICS_HASH_SECRET: "secret0"
+      RUST_BACKTRACE: 1
+      RUST_LOG: debug
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:latest
+    environment:
+      KC_HOSTNAME: keycloak
+      KC_HOSTNAME_PORT: 7080
+      KC_HOSTNAME_STRICT_BACKCHANNEL: "false"
+      KEYCLOAK_ADMIN: admin
+      KEYCLOAK_ADMIN_PASSWORD: admin
+      KC_HEALTH_ENABLED: "true"
+      KC_LOG_LEVEL: info
+    healthcheck:
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/localhost/9000 && echo -e 'GET /health/ready HTTP/1.1\\r\\nHost: localhost\\r\\nConnection: close\\r\\n\\r\\n' >&3 && cat <&3 | grep -q '200 OK'"]
+      interval: 15s
+      timeout: 2s
+      retries: 15
+    command: ["start-dev", "--http-port", "7080", "--https-port", "7443", "--import-realm"]
+    volumes: # Ignore if you don't have realm-export.json to migrate data
+      - ./keycloak-import:/opt/keycloak/data/import
+    ports:
+      - "7080:7080"
+      - "7443:7443"
+
+volumes:
+  sync_db_data:
+  tokenserver_db_data:

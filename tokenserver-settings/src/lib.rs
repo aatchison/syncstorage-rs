@@ -30,6 +30,11 @@ pub struct Settings {
     pub fxa_oauth_server_url: String,
     /// The timeout to be used when making requests to the FxA OAuth verification server.
     pub fxa_oauth_request_timeout: u64,
+    /// The type of OAuth provider: "fxa" for Firefox Accounts or "oidc" for OpenID Connect (e.g., Keycloak)
+    #[serde(default = "default_oauth_provider_type")]
+    pub oauth_provider_type: String,
+    /// The OIDC issuer URL (for OIDC providers like Keycloak). If set, this overrides fxa_oauth_server_url for OIDC flows.
+    pub oidc_issuer_url: Option<String>,
     /// The JWK to be used to verify OAuth tokens. Passing a JWK to the PyFxA Python library
     /// prevents it from making an external API call to FxA to get the JWK, yielding substantial
     /// performance benefits. This value should match that on the `/v1/jwks` endpoint on the FxA
@@ -38,6 +43,14 @@ pub struct Settings {
     /// A secondary JWK to be used to verify OAuth tokens. This is intended to be used to enable
     /// seamless key rotations on FxA.
     pub fxa_oauth_secondary_jwk: Option<Jwk>,
+    /// OAuth provider type: "fxa" for Firefox Accounts or "keycloak" for Keycloak
+    pub oauth_provider: String,
+    /// The URL of the Keycloak server used for verifying OAuth tokens.
+    pub keycloak_server_url: String,
+    /// The Keycloak realm name.
+    pub keycloak_realm: String,
+    /// The timeout to be used when making requests to the Keycloak server.
+    pub keycloak_request_timeout: u64,
     /// The rate at which capacity should be released from nodes that are at capacity.
     pub node_capacity_release_rate: Option<f32>,
     /// The type of the storage nodes used by this instance of Tokenserver.
@@ -73,8 +86,14 @@ impl Default for Settings {
             fxa_metrics_hash_secret: "secret".to_owned(),
             fxa_oauth_server_url: "https://oauth.stage.mozaws.net".to_owned(),
             fxa_oauth_request_timeout: 10,
+            oauth_provider_type: default_oauth_provider_type(),
+            oidc_issuer_url: None,
             fxa_oauth_primary_jwk: None,
             fxa_oauth_secondary_jwk: None,
+            oauth_provider: "fxa".to_owned(),
+            keycloak_server_url: "http://localhost:7080".to_owned(),
+            keycloak_realm: "sync".to_owned(),
+            keycloak_request_timeout: 10,
             node_capacity_release_rate: None,
             node_type: NodeType::Spanner,
             statsd_label: "syncstorage.tokenserver".to_owned(),
@@ -84,4 +103,8 @@ impl Default for Settings {
             token_duration: 3600,
         }
     }
+}
+
+fn default_oauth_provider_type() -> String {
+    "fxa".to_string()
 }

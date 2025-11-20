@@ -5,6 +5,7 @@ from base64 import urlsafe_b64decode
 import hmac
 import json
 import jwt
+import os
 import pytest
 import random
 import string
@@ -176,10 +177,15 @@ class TestE2e(TestCase, unittest.TestCase):
         self.assertEqual(res.json, expected_error_response)
 
     def test_valid_oauth_request(self):
+        # Skip this test when using Keycloak OIDC since it requires real FxA OAuth tokens
+        oauth_provider_type = os.environ.get('SYNC_TOKENSERVER__OAUTH_PROVIDER_TYPE', 'fxa')
+        if oauth_provider_type == 'oidc':
+            self.skipTest("test_valid_oauth_request requires FxA OAuth tokens, skipping for OIDC")
+        
         oauth_token = self.oauth_token
         headers = {
             'Authorization': 'Bearer %s' % oauth_token,
-            'X-KeyID': '1234-qqo'
+            'X-KeyID': '9999-qqo'
         }
         # Send a valid request, allocating a new user
         res = self.app.get('/1.0/sync/1.5', headers=headers)

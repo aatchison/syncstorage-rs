@@ -45,6 +45,8 @@ pub struct TokenserverRequest {
     pub service_id: i32,
     pub duration: u64,
     pub node_type: NodeType,
+    /// True when Tokenserver is configured for an OIDC provider (`oauth_provider_type` "oidc").
+    pub is_oidc: bool,
 }
 
 impl TokenserverRequest {
@@ -68,7 +70,13 @@ impl TokenserverRequest {
     /// The logic here is slightly complicated by the fact that older versions
     /// of the FxA server may not have been sending all the expected fields, and
     /// that some clients do not report the `generation` timestamp.
+    ///
+    /// Requests for an OIDC provider use `validate_oidc` instead.
     fn validate(&self) -> Result<(), TokenserverError> {
+        if self.is_oidc {
+            return self.validate_oidc();
+        }
+
         let auth_keys_changed_at = self.auth_data.keys_changed_at;
         let auth_generation = self.auth_data.generation;
         let user_keys_changed_at = self.user.keys_changed_at;
@@ -175,6 +183,83 @@ impl TokenserverRequest {
         }
         Ok(())
     }
+
+    /// The checks for requests authenticated by an OIDC provider. OIDC tokens have no FxA
+    /// `generation`, so `keys_changed_at` stands in for it when the token has none, and the
+    /// rule tying `keys_changed_at` to `generation` is not applied. Stale client states and
+    /// generation or keys_changed_at values going backwards are still rejected.
+    fn validate_oidc(&self) -> Result<(), TokenserverError> {
+        // A user record that has already been replaced can't be used.
+        if self.user.replaced_at.is_some() {
+            warn!("OIDC user has been replaced"; "uid" => self.user.uid, "replaced_at" => self.user.replaced_at);
+            let error_message = "Unacceptable client-state value stale value".to_owned();
+            return Err(TokenserverError::invalid_client_state(
+                error_message,
+                Some(vec![("is_stale", "true".to_owned())]),
+            ));
+        }
+
+        let auth_keys_changed_at = self.auth_data.keys_changed_at;
+        // Same fallback as when the user record is created and updated
+        let auth_generation = self
+            .auth_data
+            .generation
+            .or(self.auth_data.keys_changed_at);
+        let user_keys_changed_at = self.user.keys_changed_at;
+        let user_generation = Some(self.user.generation);
+
+        /// `$left` and `$right` must both be `Option`s, and `$op` must be a binary infix
+        /// operator. If `$left` and `$right` are both `Some`, this macro returns
+        /// `$left $op $right`; otherwise, it returns `false`.
+        macro_rules! opt_cmp {
+            ($left:ident $op:tt $right:ident) => {
+                $left.zip($right).map(|(l, r)| l $op r).unwrap_or(false)
+            }
+        }
+
+        if self.auth_data.client_state != self.user.client_state {
+            // The client state on the request must not have been used in the past.
+            if self
+                .user
+                .old_client_states
+                .contains(&self.auth_data.client_state)
+            {
+                let error_message = "Unacceptable client-state value stale value".to_owned();
+                return Err(TokenserverError::invalid_client_state(
+                    error_message,
+                    Some(vec![("is_stale", "true".to_owned())]),
+                ));
+            }
+
+            // A new client state must be accompanied by a change in keys_changed_at.
+            if opt_cmp!(auth_keys_changed_at <= user_keys_changed_at) {
+                let error_message =
+                    "Unacceptable client-state value new value with no keys_changed_at change"
+                        .to_owned();
+                return Err(TokenserverError::invalid_client_state(error_message, None));
+            }
+        }
+
+        // The generation on the request cannot be earlier than the generation stored on the user
+        // record. This catches retired users (generation=MAX_GENERATION).
+        if opt_cmp!(user_generation > auth_generation) {
+            return Err(TokenserverError {
+                context: "New generation less than previously-seen generation".to_owned(),
+                ..TokenserverError::invalid_generation()
+            });
+        }
+
+        // The keys_changed_at on the request cannot be earlier than the keys_changed_at stored on
+        // the user record.
+        if opt_cmp!(user_keys_changed_at > auth_keys_changed_at) {
+            return Err(TokenserverError {
+                context: "New keys_changed_at less than previously-seen keys_changed_at".to_owned(),
+                ..TokenserverError::invalid_keys_changed_at()
+            });
+        }
+
+        Ok(())
+    }
 }
 
 impl FromRequest for TokenserverRequest {
@@ -241,11 +326,17 @@ impl FromRequest for TokenserverRequest {
                     ));
                 }
             };
+            // OIDC tokens have no FxA generation, so fall back to keys_changed_at
+            let generation = if state.is_oidc {
+                auth_data.generation.or(auth_data.keys_changed_at)
+            } else {
+                auth_data.generation
+            };
             let user = db
                 .get_or_create_user(params::GetOrCreateUser {
                     service_id,
                     email: auth_data.email.clone(),
-                    generation: auth_data.generation.unwrap_or(0),
+                    generation: generation.unwrap_or(0),
                     client_state: auth_data.client_state.clone(),
                     keys_changed_at: auth_data.keys_changed_at,
                     capacity_release_rate: state.node_capacity_release_rate,
@@ -287,6 +378,7 @@ impl FromRequest for TokenserverRequest {
                 service_id,
                 duration: duration.unwrap_or(state.token_duration),
                 node_type: state.node_type,
+                is_oidc: state.is_oidc,
             };
 
             tokenserver_request.validate()?;
@@ -772,6 +864,7 @@ mod tests {
             service_id: i32::default(),
             duration: 100,
             node_type: NodeType::default(),
+            is_oidc: false,
         };
 
         assert_eq!(result, expected_tokenserver_request);
@@ -1104,6 +1197,7 @@ mod tests {
             service_id: 1,
             duration: TOKEN_DURATION,
             node_type: NodeType::default(),
+            is_oidc: false,
         };
 
         let error = tokenserver_request.validate().unwrap_err();
@@ -1113,6 +1207,96 @@ mod tests {
                 context: "New generation less than previously-seen generation".to_owned(),
                 ..TokenserverError::invalid_generation()
             }
+        );
+    }
+
+    fn make_oidc_request(
+        user_client_state: &str,
+        user_keys_changed_at: Option<i64>,
+        auth_client_state: &str,
+        auth_keys_changed_at: Option<i64>,
+    ) -> TokenserverRequest {
+        TokenserverRequest {
+            user: results::GetOrCreateUser {
+                uid: 1,
+                email: "test@test.com".to_owned(),
+                client_state: user_client_state.to_owned(),
+                generation: 1234,
+                node: "node".to_owned(),
+                keys_changed_at: user_keys_changed_at,
+                replaced_at: None,
+                created_at: 1234,
+                first_seen_at: 1234,
+                old_client_states: vec!["0000".to_owned()],
+            },
+            auth_data: AuthData {
+                fxa_uid: "test".to_owned(),
+                email: "test@test.com".to_owned(),
+                // OIDC tokens usually carry no FxA generation
+                generation: None,
+                keys_changed_at: auth_keys_changed_at,
+                client_state: auth_client_state.to_owned(),
+            },
+            shared_secret: "secret".to_owned(),
+            hashed_fxa_uid: "abcdef".to_owned(),
+            hashed_device_id: "abcdef".to_owned(),
+            service_id: 1,
+            duration: TOKEN_DURATION,
+            node_type: NodeType::default(),
+            is_oidc: true,
+        }
+    }
+
+    #[actix_rt::test]
+    async fn test_oidc_keys_changed_at_stands_in_for_generation() {
+        // No generation on the request, but keys_changed_at moved forward with the client state
+        let tokenserver_request = make_oidc_request("aaaa", Some(1234), "bbbb", Some(1235));
+        assert!(tokenserver_request.validate().is_ok());
+
+        // keys_changed_at behind the stored generation counts as an old generation
+        let tokenserver_request = make_oidc_request("aaaa", None, "aaaa", Some(1233));
+        assert_eq!(
+            tokenserver_request.validate().unwrap_err(),
+            TokenserverError {
+                context: "New generation less than previously-seen generation".to_owned(),
+                ..TokenserverError::invalid_generation()
+            }
+        );
+    }
+
+    #[actix_rt::test]
+    async fn test_oidc_client_state_change_needs_keys_changed_at_change() {
+        let tokenserver_request = make_oidc_request("aaaa", Some(1234), "bbbb", Some(1234));
+        assert_eq!(
+            tokenserver_request.validate().unwrap_err(),
+            TokenserverError::invalid_client_state(
+                "Unacceptable client-state value new value with no keys_changed_at change"
+                    .to_owned(),
+                None,
+            )
+        );
+    }
+
+    #[actix_rt::test]
+    async fn test_oidc_stale_client_state() {
+        let tokenserver_request = make_oidc_request("aaaa", Some(1234), "0000", Some(1235));
+        assert_eq!(
+            tokenserver_request.validate().unwrap_err(),
+            TokenserverError::invalid_client_state(
+                "Unacceptable client-state value stale value".to_owned(),
+                Some(vec![("is_stale", "true".to_owned())]),
+            )
+        );
+
+        // A user record that was already replaced is treated as stale too
+        let mut tokenserver_request = make_oidc_request("aaaa", Some(1234), "aaaa", Some(1234));
+        tokenserver_request.user.replaced_at = Some(1235);
+        assert_eq!(
+            tokenserver_request.validate().unwrap_err(),
+            TokenserverError::invalid_client_state(
+                "Unacceptable client-state value stale value".to_owned(),
+                Some(vec![("is_stale", "true".to_owned())]),
+            )
         );
     }
 
@@ -1146,6 +1330,7 @@ mod tests {
             service_id: 1,
             duration: TOKEN_DURATION,
             node_type: NodeType::default(),
+            is_oidc: false,
         };
 
         let error = tokenserver_request.validate().unwrap_err();
@@ -1187,6 +1372,7 @@ mod tests {
             service_id: 1,
             duration: TOKEN_DURATION,
             node_type: NodeType::default(),
+            is_oidc: false,
         };
 
         let error = tokenserver_request.validate().unwrap_err();
@@ -1229,6 +1415,7 @@ mod tests {
             service_id: 1,
             duration: TOKEN_DURATION,
             node_type: NodeType::default(),
+            is_oidc: false,
         };
 
         let error = tokenserver_request.validate().unwrap_err();
@@ -1271,6 +1458,7 @@ mod tests {
             service_id: 1,
             duration: TOKEN_DURATION,
             node_type: NodeType::default(),
+            is_oidc: false,
         };
 
         let error = tokenserver_request.validate().unwrap_err();
@@ -1311,6 +1499,7 @@ mod tests {
             service_id: 1,
             duration: TOKEN_DURATION,
             node_type: NodeType::default(),
+            is_oidc: false,
         };
 
         let error = tokenserver_request.validate().unwrap_err();
@@ -1348,6 +1537,7 @@ mod tests {
             fxa_webhook_enabled: false,
             fxa_webhook_metrics_only: false,
             allow_new_users: true,
+            is_oidc: false,
         }
     }
 
@@ -1372,6 +1562,7 @@ mod tests {
             fxa_webhook_enabled: true,
             fxa_webhook_metrics_only: false,
             allow_new_users: true,
+            is_oidc: false,
         }
     }
 

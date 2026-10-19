@@ -26,11 +26,11 @@
 		}
 	},
 
-	// Build dependencies (the set upstream's Dockerfile installs), the toolchain pinned by
-	// rust-version in Cargo.toml, and every crate in Cargo.lock, so later builds and tests
-	// need no network. The named cargo volume is gone: it masked /usr/local/cargo and kept
+	// Build dependencies (the set upstream's Dockerfile installs) and every crate in
+	// Cargo.lock, so later builds and tests need no network. The image's Rust (1.99) already
+	// meets rust-version in Cargo.toml (1.98.1). The named cargo volume is gone: it masked /usr/local/cargo and kept
 	// stale toolchains across image updates.
-	"postCreateCommand": "sudo apt-get update && sudo apt-get install -y --no-install-recommends default-libmysqlclient-dev libpq-dev cmake pkg-config libssl-dev python3-dev clang && rustup toolchain install 1.98.1 --profile minimal --component rustfmt --component clippy && rustup default 1.98.1 && cargo fetch --locked"
+	"postCreateCommand": "sudo apt-get update && sudo apt-get install -y --no-install-recommends default-libmysqlclient-dev libpq-dev cmake pkg-config libssl-dev python3-dev clang && cargo fetch --locked"
 
 	// Use 'forwardPorts' to make a list of ports inside the container available locally.
 	// "forwardPorts": [],

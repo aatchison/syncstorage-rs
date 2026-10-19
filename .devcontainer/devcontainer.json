@@ -2,8 +2,9 @@
 // README at: https://github.com/devcontainers/templates/tree/main/src/rust
 {
 	"name": "Rust",
-	// Or use a Dockerfile or Docker Compose file. More info: https://containers.dev/guide/dockerfile
-	"image": "mcr.microsoft.com/devcontainers/rust:1-1-bullseye",
+	// Trixie, to match upstream's build image (Dockerfile: Rust 1.98.1 on Debian trixie).
+	// The earlier 1-1-bullseye image is past Debian 11 LTS.
+	"image": "mcr.microsoft.com/devcontainers/rust:1-trixie",
 	"features": {
 		"ghcr.io/devcontainers/features/docker-in-docker:2": {
 			"moby": true,
@@ -25,26 +26,14 @@
 		}
 	},
 
-	// Use 'mounts' to make the cargo cache persistent in a Docker Volume.
-	"mounts": [
-		{
-			"source": "devcontainer-cargo-cache-${devcontainerId}",
-			"target": "/usr/local/cargo",
-			"type": "volume"
-		}
-	]
-
-	// Features to add to the dev container. More info: https://containers.dev/features.
-	// "features": {},
+	// Build dependencies (the set upstream's Dockerfile installs), the toolchain pinned by
+	// rust-version in Cargo.toml, and every crate in Cargo.lock, so later builds and tests
+	// need no network. The named cargo volume is gone: it masked /usr/local/cargo and kept
+	// stale toolchains across image updates.
+	"postCreateCommand": "sudo apt-get update && sudo apt-get install -y --no-install-recommends default-libmysqlclient-dev libpq-dev cmake pkg-config libssl-dev python3-dev clang && rustup toolchain install 1.98.1 --profile minimal --component rustfmt --component clippy && rustup default 1.98.1 && cargo fetch --locked"
 
 	// Use 'forwardPorts' to make a list of ports inside the container available locally.
 	// "forwardPorts": [],
-
-	// Use 'postCreateCommand' to run commands after the container is created.
-	// "postCreateCommand": "rustc --version",
-
-	// Configure tool-specific properties.
-	// "customizations": {},
 
 	// Uncomment to connect as root instead. More info: https://aka.ms/dev-containers-non-root.
 	// "remoteUser": "root"

@@ -4,7 +4,7 @@ mod crypto;
 pub mod test_utils;
 
 pub use crypto::{FxaWebhookClaims, JWTVerifyError, SETVerifierImpl};
-#[cfg(not(feature = "py"))]
+#[cfg(any(not(feature = "py"), feature = "keycloak"))]
 pub use crypto::{JWTVerifier, JWTVerifierImpl};
 
 #[allow(clippy::result_large_err)]

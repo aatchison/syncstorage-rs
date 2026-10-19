@@ -13,9 +13,7 @@ use tokenserver_auth::{MakeTokenPlaintext, Tokenlib, TokenserverOrigin};
 use tokenserver_common::{NodeType, TokenserverError};
 use tokenserver_db::{
     Db, SYNC_SERVICE_NAME,
-    params::{
-        GetNodeId, PostUser, PutUser, ReplaceUser, ReplaceUsers, RetireUser, UpdateUserGeneration,
-    },
+    params::{GetNodeId, PostUser, PutUser, ReplaceUsers, RetireUser, UpdateUserGeneration},
 };
 
 use super::{
@@ -97,10 +95,7 @@ fn get_token_plaintext(
     req: &TokenserverRequest,
     updates: &UserUpdates,
 ) -> Result<MakeTokenPlaintext, TokenserverError> {
-    let fxa_kid = if req.is_oidc {
-        // OIDC tokens have no FxA key ID, so build one from the current time and the uid
-        format!("{:013}-oauth-{:}", Utc::now().timestamp(), updates.uid)
-    } else {
+    let fxa_kid = {
         // If decoding the hex bytes fails, it means we did something wrong when we stored the
         // client state in the database
         let client_state =
@@ -160,10 +155,6 @@ async fn update_user(
     req: &TokenserverRequest,
     mut db: Box<dyn Db>,
 ) -> Result<UserUpdates, TokenserverError> {
-    if req.is_oidc {
-        return update_oidc_user(req, db).await;
-    }
-
     let keys_changed_at = match (req.auth_data.keys_changed_at, req.user.keys_changed_at) {
         // If the keys_changed_at in the request is larger than that stored on the user record,
         // update to the value in the request.
@@ -256,81 +247,6 @@ async fn update_user(
             db.timeout(),
             db.replace_users(ReplaceUsers {
                 email: req.auth_data.email.clone(),
-                service_id: req.service_id,
-                replaced_at: timestamp,
-            }),
-        )
-        .await?;
-
-        Ok(UserUpdates {
-            keys_changed_at,
-            generation,
-            uid,
-        })
-    } else {
-        if generation != req.user.generation || keys_changed_at != req.user.keys_changed_at {
-            let params = PutUser {
-                email: req.auth_data.email.clone(),
-                service_id: req.service_id,
-                generation,
-                keys_changed_at,
-            };
-
-            apply_timeout(db.timeout(), db.put_user(params)).await?;
-        }
-
-        Ok(UserUpdates {
-            keys_changed_at,
-            generation,
-            uid: req.user.uid,
-        })
-    }
-}
-
-/// The OIDC version of `update_user`. OIDC tokens have no FxA generation, so `keys_changed_at`
-/// stands in for it when the token has none. `TokenserverRequest::validate_oidc` has already
-/// rejected values that go backwards.
-async fn update_oidc_user(
-    req: &TokenserverRequest,
-    mut db: Box<dyn Db>,
-) -> Result<UserUpdates, TokenserverError> {
-    let keys_changed_at = req.auth_data.keys_changed_at;
-    let generation = req
-        .auth_data
-        .generation
-        .or(keys_changed_at)
-        .unwrap_or(req.user.generation);
-
-    // If the client state changed, create a new user record and mark the current one as
-    // replaced. Otherwise, update the user in place.
-    if req.auth_data.client_state != req.user.client_state {
-        let timestamp = Utc::now().timestamp_millis();
-
-        let post_user_params = PostUser {
-            service_id: req.service_id,
-            email: req.auth_data.email.clone(),
-            generation,
-            client_state: req.auth_data.client_state.clone(),
-            node_id: apply_timeout(
-                db.timeout(),
-                db.get_node_id(GetNodeId {
-                    service_id: req.service_id,
-                    node: req.user.node.clone(),
-                }),
-            )
-            .await?
-            .id,
-            keys_changed_at,
-            created_at: timestamp,
-        };
-        let uid = apply_timeout(db.timeout(), db.post_user(post_user_params))
-            .await?
-            .uid;
-
-        apply_timeout(
-            db.timeout(),
-            db.replace_user(ReplaceUser {
-                uid: req.user.uid,
                 service_id: req.service_id,
                 replaced_at: timestamp,
             }),
@@ -548,7 +464,6 @@ mod tests {
             fxa_webhook_enabled: true,
             fxa_webhook_metrics_only: false,
             allow_new_users: true,
-            is_oidc: false,
         }
     }
 

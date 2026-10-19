@@ -36,9 +36,6 @@ pub struct ServerState {
     pub fxa_webhook_enabled: bool,
     pub fxa_webhook_metrics_only: bool,
     pub allow_new_users: bool,
-    /// True when `oauth_provider_type` is "oidc". Requests then skip the FxA-specific
-    /// generation and keys_changed_at rules (see `TokenserverRequest::validate`).
-    pub is_oidc: bool,
 }
 
 impl ServerState {
@@ -117,7 +114,6 @@ impl ServerState {
             fxa_webhook_enabled: settings.fxa_webhook_enabled,
             fxa_webhook_metrics_only: settings.fxa_webhook_metrics_only,
             allow_new_users: settings.allow_new_users,
-            is_oidc: settings.oauth_provider_type.eq_ignore_ascii_case("oidc"),
         })
     }
 

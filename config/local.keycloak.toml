@@ -1,0 +1,61 @@
+# =============================================================================
+# Local development configuration: MySQL build with Keycloak as the identity
+# provider
+# =============================================================================
+#
+# Use with a syncserver built with `--no-default-features
+# --features=syncstorage-db/mysql,keycloak` (see Dockerfile.keycloak) and a
+# Keycloak server with the realm in keycloak/realm-export.json, for example the
+# one from docker/docker-compose.mysql.keycloak.yaml:
+#
+#     cargo run --no-default-features --features=syncstorage-db/mysql,keycloak \
+#         -- --config config/local.keycloak.toml
+#
+# The general settings are explained in config/local.example.toml and
+# docs/src/config.md.
+# =============================================================================
+
+# REQUIRED. Secret used to derive the Hawk signing/token secrets.
+master_secret = "INSERT_SECRET_KEY_HERE"
+
+human_logs = 1
+
+# -----------------------------------------------------------------------------
+# Syncstorage
+# -----------------------------------------------------------------------------
+syncstorage.enabled = true
+syncstorage.database_url = "mysql://test:test@localhost:3306/syncstorage"
+syncstorage.enable_quota = 0
+syncstorage.limits.max_total_records = 9984
+
+# -----------------------------------------------------------------------------
+# Tokenserver
+# -----------------------------------------------------------------------------
+tokenserver.enabled = true
+tokenserver.database_url = "mysql://test:test@localhost:3306/tokenserver"
+tokenserver.node_type = "mysql"
+tokenserver.run_migrations = true
+
+# Users' emails are built as "<keycloak subject>@<fxa_email_domain>".
+tokenserver.fxa_email_domain = "localhost"
+
+# REQUIRED for real deployments. Secret used to hash users' metrics UIDs.
+tokenserver.fxa_metrics_hash_secret = "INSERT_SECRET_KEY_HERE"
+
+# Verify tokens with Keycloak instead of FxA. Keys are fetched from
+# {keycloak_server_url}/realms/{keycloak_realm}/protocol/openid-connect/certs.
+tokenserver.oauth_provider = "keycloak"
+tokenserver.keycloak_server_url = "http://localhost:7080"
+tokenserver.keycloak_realm = "sync"
+tokenserver.keycloak_request_timeout = 10
+
+# Apply the OIDC request rules (no FxA generation; keys_changed_at from the
+# X-KeyID header stands in for it).
+tokenserver.oauth_provider_type = "oidc"
+tokenserver.oidc_issuer_url = "http://localhost:7080/realms/sync"
+
+# -----------------------------------------------------------------------------
+# CORS (optional)
+# -----------------------------------------------------------------------------
+# cors_allowed_origin = "localhost"
+# cors_max_age = 86400

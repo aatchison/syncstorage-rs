@@ -50,6 +50,7 @@ INT_POSTGRES_JUNIT_XML := $(TEST_RESULTS_DIR)/$(TEST_FILE_PREFIX)integration__po
 INT_POSTGRES_NO_JWK_JUNIT_XML := $(TEST_RESULTS_DIR)/$(TEST_FILE_PREFIX)integration__postgres-no-jwk-results.xml
 INT_MYSQL_JUNIT_XML := $(TEST_RESULTS_DIR)/$(TEST_FILE_PREFIX)integration__mysql-results.xml
 INT_MYSQL_NO_JWK_JUNIT_XML := $(TEST_RESULTS_DIR)/$(TEST_FILE_PREFIX)integration__mysql-no-jwk-results.xml
+INT_MYSQL_KEYCLOAK_JUNIT_XML := $(TEST_RESULTS_DIR)/$(TEST_FILE_PREFIX)integration__mysql-keycloak-results.xml
 INT_RECONCILIATION_JUNIT_XML := $(TEST_RESULTS_DIR)/$(TEST_FILE_PREFIX)integration__reconciliation-results.xml
 
 clippy_mysql:
@@ -93,6 +94,14 @@ docker_start_mysql_rebuild:
 
 docker_stop_mysql:
 	docker compose -f docker/docker-compose.mysql.yaml down
+
+# Only start syncserver (and what it depends on, including Keycloak), so the
+# mock FxA server from the base file is not needed.
+docker_start_mysql_keycloak:  ##  Build and start a MySQL Syncserver that verifies Keycloak tokens.
+	docker compose -f docker/docker-compose.mysql.yaml -f docker/docker-compose.mysql.keycloak.yaml up --build -d syncserver
+
+docker_stop_mysql_keycloak:  ##  Stop the MySQL Syncserver and Keycloak.
+	docker compose -f docker/docker-compose.mysql.yaml -f docker/docker-compose.mysql.keycloak.yaml down
 
 docker_start_spanner:
 	docker compose -f docker/docker-compose.spanner.yaml up -d
@@ -151,6 +160,26 @@ docker_run_mysql_e2e_tests:
 	docker compose \
 		-f docker/docker-compose.mysql.yaml \
 		-f docker/docker-compose.e2e.mysql.yaml \
+		down -v --remove-orphans
+	exit $$exit_code
+
+# Needs KEYCLOAK_CLIENT_SECRET; see docker/docker-compose.e2e.mysql.keycloak.yaml.
+.ONESHELL:
+docker_run_mysql_keycloak_e2e_tests:
+	exit_code=0
+	RESULTS_FILENAME=mysql_keycloak_integration_results.xml docker compose \
+		-f docker/docker-compose.mysql.yaml \
+		-f docker/docker-compose.e2e.mysql.yaml \
+		-f docker/docker-compose.e2e.mysql.keycloak.yaml \
+	 	up \
+	 	--build \
+	 	--exit-code-from e2e-tests \
+	 	--abort-on-container-exit || exit_code=$$?
+	docker cp mysql-e2e-tests:/mysql_keycloak_integration_results.xml ${INT_MYSQL_KEYCLOAK_JUNIT_XML}
+	docker compose \
+		-f docker/docker-compose.mysql.yaml \
+		-f docker/docker-compose.e2e.mysql.yaml \
+		-f docker/docker-compose.e2e.mysql.keycloak.yaml \
 		down -v --remove-orphans
 	exit $$exit_code
 

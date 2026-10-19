@@ -1,0 +1,50 @@
+# Overlay for docker-compose.mysql.yaml + docker-compose.e2e.mysql.yaml that runs
+# the integration tests against a syncserver that verifies Keycloak tokens (native
+# verifier in "oidc" mode). Run it with:
+#
+#     KEYCLOAK_CLIENT_SECRET=... make docker_run_mysql_keycloak_e2e_tests
+#
+# KEYCLOAK_CLIENT_SECRET must match the "confidential-client" secret in
+# keycloak/realm-export.json. The tests get access tokens for that client's
+# service account with the client credentials grant.
+
+services:
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.2.4
+    command: ["start-dev", "--http-port", "7080", "--import-realm"]
+    environment:
+      KC_HEALTH_ENABLED: "true"
+    healthcheck:
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/localhost/9000 && echo -e 'GET /health/ready HTTP/1.1\\r\\nHost: localhost\\r\\nConnection: close\\r\\n\\r\\n' >&3 && cat <&3 | grep -q '200 OK'"]
+      interval: 5s
+      timeout: 2s
+      retries: 30
+      start_period: 20s
+    volumes:
+      - ../keycloak:/opt/keycloak/data/import:ro
+
+  syncserver:
+    image: syncstorage-rs:keycloak
+    build:
+      context: ..
+      dockerfile: Dockerfile.keycloak
+      args:
+        SYNCSTORAGE_DATABASE_BACKEND: mysql
+        TOKENSERVER_DATABASE_BACKEND: mysql
+    depends_on:
+      keycloak:
+        condition: service_healthy
+    environment:
+      SYNC_TOKENSERVER__OAUTH_PROVIDER_TYPE: oidc
+      SYNC_TOKENSERVER__OIDC_ISSUER_URL: http://keycloak:7080/realms/sync
+      RUST_BACKTRACE: 1
+
+  e2e-tests:
+    depends_on:
+      keycloak:
+        condition: service_healthy
+    environment:
+      SYNC_TOKENSERVER__OAUTH_PROVIDER_TYPE: oidc
+      SYNC_TOKENSERVER__OIDC_ISSUER_URL: http://keycloak:7080/realms/sync
+      KEYCLOAK_CLIENT_ID: confidential-client
+      KEYCLOAK_CLIENT_SECRET: ${KEYCLOAK_CLIENT_SECRET:?set KEYCLOAK_CLIENT_SECRET to the confidential-client secret}

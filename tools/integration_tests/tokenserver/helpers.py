@@ -9,6 +9,7 @@ whatever it needs to seed fixtures.
 """
 
 import binascii
+import functools
 import json
 import math
 import os
@@ -16,6 +17,9 @@ import time
 import urllib.parse as urlparse
 from base64 import urlsafe_b64encode as b64encode
 
+import jwt
+import pytest
+import requests
 from sqlalchemy.sql import text as sqltext
 from tokenlib.utils import decode_token_bytes
 from webtest import TestApp
@@ -46,6 +50,62 @@ def get_expected_node_type() -> str:
     if node_type.startswith("mysql"):
         return "mysql"
     return node_type
+
+
+# ── Keycloak (OIDC) helpers ───────────────────────────────────────────────────
+#
+# When SYNC_TOKENSERVER__OAUTH_PROVIDER_TYPE is "oidc", the tests get real access
+# tokens from Keycloak with the client credentials grant instead of building fake FxA
+# tokens. The tokens belong to the client's service account, so every test acts as
+# that one user.
+# Settings:
+#   SYNC_TOKENSERVER__OIDC_ISSUER_URL  e.g. http://keycloak:7080/realms/sync
+#   KEYCLOAK_CLIENT_ID                 defaults to "confidential-client"
+#   KEYCLOAK_CLIENT_SECRET             the client's secret (required)
+
+
+def is_using_keycloak() -> bool:
+    """Return True when the tests target an OIDC provider (Keycloak) instead of FxA."""
+    provider_type = os.environ.get("SYNC_TOKENSERVER__OAUTH_PROVIDER_TYPE", "fxa")
+    return provider_type.lower() == "oidc"
+
+
+def skip_if_keycloak(reason: str):
+    """Mark a test as FxA-only, so it is skipped when running against Keycloak."""
+    return pytest.mark.skipif(is_using_keycloak(), reason=reason)
+
+
+def get_keycloak_token() -> str:
+    """Request a new access token from Keycloak using the client credentials grant."""
+    issuer = os.environ["SYNC_TOKENSERVER__OIDC_ISSUER_URL"].rstrip("/")
+    response = requests.post(
+        f"{issuer}/protocol/openid-connect/token",
+        data={
+            "grant_type": "client_credentials",
+            "client_id": os.environ.get("KEYCLOAK_CLIENT_ID", "confidential-client"),
+            "client_secret": os.environ["KEYCLOAK_CLIENT_SECRET"],
+            "scope": f"openid {DEFAULT_OAUTH_SCOPE}",
+        },
+        timeout=10,
+    )
+    response.raise_for_status()
+    token: str = response.json()["access_token"]
+    return token
+
+
+@functools.lru_cache(maxsize=None)
+def keycloak_subject() -> str:
+    """Return the "sub" claim of the Keycloak service account's tokens."""
+    # Tokenserver verifies the signature; the tests only need to read the claim.
+    claims = jwt.decode(get_keycloak_token(), options={"verify_signature": False})
+    subject: str = claims["sub"]
+    return subject
+
+
+def default_email() -> str:
+    """Return the email Tokenserver derives for the default test user."""
+    user = keycloak_subject() if is_using_keycloak() else "test"
+    return f"{user}@{FXA_EMAIL_DOMAIN}"
 
 
 # ── SQL helpers ───────────────────────────────────────────────────────────────
@@ -187,7 +247,7 @@ def add_user(
     created_at = created_at or math.trunc(time.time() * 1000)
     params = {
         "service": service_id,
-        "email": email or f"test@{FXA_EMAIL_DOMAIN}",
+        "email": email or default_email(),
         "nodeid": nodeid,
         "generation": generation,
         "keys_changed_at": keys_changed_at,
@@ -314,7 +374,19 @@ def build_oauth_headers(
     status: int = 200,
     **additional_headers: str,
 ) -> dict:
-    """Build OAuth Bearer + X-KeyID headers for a test request."""
+    """Build OAuth Bearer + X-KeyID headers for a test request.
+
+    Against Keycloak, the Bearer token is a real access token for the service
+    account, so `generation`, `user` and `status` have no effect.
+    """
+    if is_using_keycloak():
+        headers = {"Authorization": f"Bearer {get_keycloak_token()}"}
+        client_state_bytes = binascii.unhexlify(client_state or "")
+        client_state_b64 = b64encode(client_state_bytes).strip(b"=").decode("utf-8")
+        headers["X-KeyID"] = f"{keys_changed_at}-{client_state_b64}"
+        headers.update(additional_headers)
+        return headers
+
     claims = {
         "user": user,
         "generation": generation,

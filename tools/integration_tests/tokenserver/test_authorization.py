@@ -7,8 +7,11 @@ from integration_tests.tokenserver.helpers import (
     add_user,
     build_oauth_headers,
     get_user,
+    skip_if_keycloak,
     unsafe_parse_token,
 )
+
+FXA_GENERATION_ONLY = "generation and keys_changed_at validation is FxA-specific"
 
 
 def test_unauthorized_error_status(ts_ctx):
@@ -74,6 +77,7 @@ def test_invalid_client_state_in_x_client_state(ts_ctx):
     assert res.json == expected_error_response
 
 
+@skip_if_keycloak(FXA_GENERATION_ONLY)
 def test_keys_changed_at_less_than_equal_to_generation(ts_ctx):
     """Test keys changed at less than equal to generation."""
     db_conn = ts_ctx["db_conn"]
@@ -151,6 +155,7 @@ def test_disallow_reusing_old_client_state(ts_ctx):
     assert res1.json["uid"] != res2.json["uid"]
 
 
+@skip_if_keycloak(FXA_GENERATION_ONLY)
 def test_generation_change_must_accompany_client_state_change(ts_ctx):
     """Test generation change must accompany client state change."""
     db_conn = ts_ctx["db_conn"]
@@ -206,6 +211,7 @@ def test_generation_change_must_accompany_client_state_change(ts_ctx):
     app.get("/1.0/sync/1.5", headers=headers)
 
 
+@skip_if_keycloak(FXA_GENERATION_ONLY)
 def test_keys_changed_at_change_must_accompany_client_state_change(ts_ctx):
     """Test keys changed at change must accompany client state change."""
     db_conn = ts_ctx["db_conn"]
@@ -239,6 +245,7 @@ def test_keys_changed_at_change_must_accompany_client_state_change(ts_ctx):
     app.get("/1.0/sync/1.5", headers=headers)
 
 
+@skip_if_keycloak(FXA_GENERATION_ONLY)
 def test_generation_must_not_be_less_than_last_seen_value(ts_ctx):
     """Test generation must not be less than last seen value."""
     db_conn = ts_ctx["db_conn"]
@@ -277,6 +284,7 @@ def test_generation_must_not_be_less_than_last_seen_value(ts_ctx):
     assert res.json["uid"] == uid
 
 
+@skip_if_keycloak(FXA_GENERATION_ONLY)
 def test_set_generation_unchanged_without_keys_changed_at_update(ts_ctx):
     """Test set generation unchanged without keys changed at update."""
     db_conn = ts_ctx["db_conn"]
@@ -304,6 +312,7 @@ def test_set_generation_unchanged_without_keys_changed_at_update(ts_ctx):
     assert user["generation"] == 1235
 
 
+@skip_if_keycloak(FXA_GENERATION_ONLY)
 def test_set_generation_with_keys_changed_at_initialization(ts_ctx):
     """Test set generation with keys changed at initialization."""
     db_conn = ts_ctx["db_conn"]
@@ -323,6 +332,7 @@ def test_set_generation_with_keys_changed_at_initialization(ts_ctx):
     assert user["generation"] == 1234
 
 
+@skip_if_keycloak(FXA_GENERATION_ONLY)
 def test_fxa_kid_change(ts_ctx):
     """Test fxa kid change."""
     db_conn = ts_ctx["db_conn"]
@@ -399,6 +409,7 @@ def test_client_specified_duration(ts_ctx):
 # Although all servers are now writing keys_changed_at, we still need this
 # case to be handled. See this PR for more information:
 # https://github.com/mozilla-services/tokenserver/pull/176
+@skip_if_keycloak("FxA gradual rollout behavior does not apply to Keycloak")
 def test_kid_change_during_gradual_tokenserver_rollout(ts_ctx):
     """Test kid change during gradual tokenserver rollout."""
     db_conn = ts_ctx["db_conn"]
@@ -523,6 +534,7 @@ def test_update_client_state(ts_ctx):
     assert expected_error_response == res.json
 
 
+@skip_if_keycloak(FXA_GENERATION_ONLY)
 def test_set_generation_from_no_generation(ts_ctx):
     """Test set generation from no generation."""
     db_conn = ts_ctx["db_conn"]
@@ -542,6 +554,7 @@ def test_set_generation_from_no_generation(ts_ctx):
     assert user["generation"] == 1234
 
 
+@skip_if_keycloak("Keycloak requests always include keys_changed_at")
 def test_set_keys_changed_at_from_no_keys_changed_at(ts_ctx):
     """Test set keys changed at from no keys changed at."""
     db_conn = ts_ctx["db_conn"]
@@ -586,6 +599,7 @@ def test_x_client_state_must_have_same_client_state_as_key_id(ts_ctx):
     app.get("/1.0/sync/1.5", headers=headers)
 
 
+@skip_if_keycloak(FXA_GENERATION_ONLY)
 def test_zero_generation_treated_as_null(ts_ctx):
     """Test zero generation treated as null."""
     db_conn = ts_ctx["db_conn"]

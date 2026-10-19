@@ -18,6 +18,7 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from integration_tests.tokenserver.helpers import (
     FXA_METRICS_HASH_SECRET,
     TOKEN_SIGNING_SECRET,
+    skip_if_keycloak,
     unsafe_parse_token,
 )
 
@@ -88,6 +89,7 @@ def test_unauthorized_oauth_error_status(ts_ctx, fxa_auth):
     assert res.json == expected_error_response
 
 
+@skip_if_keycloak("requires a real FxA OAuth token")
 def test_valid_oauth_request(ts_ctx, fxa_auth):
     """Test valid oauth request."""
     app = ts_ctx["app"]

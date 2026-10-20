@@ -152,6 +152,23 @@ would silently drop the payload.
 | <span id="SYNC_TOKENSERVER__OIDC_ISSUER_URL"></span>SYNC_TOKENSERVER__OIDC_ISSUER_URL | None | OIDC issuer URL, e.g. `http://keycloak:7080/realms/sync`. Tokens must carry it as `iss`; keys come from `{OIDC_ISSUER_URL}/protocol/openid-connect/certs` |
 | <span id="SYNC_TOKENSERVER__OIDC_AUDIENCE"></span>SYNC_TOKENSERVER__OIDC_AUDIENCE | None | Audience that OIDC access tokens must include in `aud` |
 
+#### OIDC mode (Keycloak)
+
+With `OAUTH_PROVIDER=oidc`, Tokenserver accepts an access token only if it is:
+
+- an RFC 9068 access token, with header `typ: at+jwt` (Keycloak client option `access.token.header.type.rfc9068`), signed with RS256 and carrying an unexpired `exp`
+- issued by `iss` equal to `OIDC_ISSUER_URL` (a trailing `/` is ignored)
+- for an `aud` that contains `OIDC_AUDIENCE` (in Keycloak, an audience mapper)
+- granted the `https://identity.mozilla.com/apps/oldsync` scope, in a space-separated `scope`
+
+An optional `fxa-generation` claim is used as the user's generation. It must be a JSON number (Keycloak mapper `jsonType` `long`) in milliseconds since the epoch, must never decrease, and must never be lower than any `keys_changed_at` the client has sent. Without it there is no generation-based revocation: a revoked user keeps access for at most the access-token lifetime plus `TOKEN_DURATION`.
+
+The signing keys are fetched from `{OIDC_ISSUER_URL}/protocol/openid-connect/certs` on every request, with no cache. If that fetch fails, Tokenserver returns 503; tokens that the fetched keys don't verify get 401.
+
+Of the FxA settings above, these still apply: `FXA_EMAIL_DOMAIN` (users are keyed as `<sub>@<FXA_EMAIL_DOMAIN>`), `FXA_METRICS_HASH_SECRET`, and `FXA_OAUTH_REQUEST_TIMEOUT` (the JWKS request timeout). Startup fails if `FXA_WEBHOOK_ENABLED`, `FXA_OAUTH_PRIMARY_JWK` or `FXA_OAUTH_SECONDARY_JWK` is set in OIDC mode (so Keycloak keys can't be pinned through them), or if `OIDC_ISSUER_URL` or `OIDC_AUDIENCE` is set without `OAUTH_PROVIDER=oidc`.
+
+`keycloak/realm-export.json` is a realm for local development only; don't use it in a deployment.
+
 ### StatsD Metrics
 
 | Env Var | Default Value | Description |

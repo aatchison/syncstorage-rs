@@ -72,6 +72,8 @@ DELETE_USER_EVENTS = ("DELETE_ACCOUNT",)
 ADMIN_USER_PATH = re.compile(r"^users/([^/]+)(?:/(reset-password|logout))?$")
 
 PAGE_SIZE = 100
+# The user events the realm must store
+REQUIRED_EVENT_TYPES = (*PASSWORD_USER_EVENTS, *DELETE_USER_EVENTS)
 # Keycloak's body for a 404 on a user that doesn't exist. A 404 without it may
 # come from a proxy or a wrong URL, and doesn't show that a user is gone.
 USER_NOT_FOUND = "User not found"
@@ -96,6 +98,10 @@ where
 
 class RevokerError(Exception):
     """A failure that stops this poll or reconcile; it is safe to log."""
+
+
+class FatalRevokerError(RevokerError):
+    """A failure that retrying can't fix: the revoker exits, even when looping."""
 
 
 @dataclass(frozen=True)
@@ -190,6 +196,7 @@ class Config:
     timeout: int = 10
     attempts: int = 4
     reconcile_max: int = 10
+    max_failures: int = 5
 
     @classmethod
     def from_env(cls, env: Mapping[str, str]) -> "Config":
@@ -240,7 +247,10 @@ class Config:
             timeout=_env_int(env, "REVOKER_TIMEOUT", 10),
             attempts=_env_int(env, "REVOKER_ATTEMPTS", 4),
             reconcile_max=_env_int(env, "REVOKER_RECONCILE_MAX", 10),
+            max_failures=_env_int(env, "REVOKER_MAX_FAILURES", 5),
         )
+        if config.max_failures < 1:
+            raise RevokerError("REVOKER_MAX_FAILURES must be at least 1")
         # database.py reads the URL itself; check it here so a missing URL fails
         # at startup rather than at the first deletion
         required("SYNC_TOKENSERVER__DATABASE_URL")
@@ -364,6 +374,19 @@ class Keycloak:
             },
         )
 
+    def events_config(self) -> dict:
+        """Return the realm's events configuration."""
+        res = self.admin("GET", "/events/config")
+        try:
+            config = res.json() if res.status_code == 200 else None
+        except ValueError:
+            config = None
+        if not isinstance(config, dict):
+            raise RevokerError(
+                f"GET /events/config: HTTP {res.status_code} without a configuration"
+            )
+        return config
+
     def client_uuid(self, client_id: str) -> str:
         """Return the internal ID of a client, raising RevokerError if there is none."""
         res = self.admin("GET", "/clients", params={"clientId": client_id})
@@ -460,28 +483,38 @@ class Cursor:
     stamped with a clock that runs behind, still turns up; `seen` holds the
     keys of the events handled in that window, so none is handled twice.
     `floor` is the revoker's first start minus the overlap: older events are
-    never handled.
+    never handled. `polled` is the revoker's clock at the start of the last
+    poll that handled every event (or at the first start): events stored
+    before it have been seen, however quiet the realm.
     """
 
     path: str
     time: int
     floor: int
     seen: dict[str, int]
+    polled: int
 
     @classmethod
-    def load(cls, path: str, start_ms: int) -> "Cursor":
+    def load(cls, path: str, start_ms: int, now_ms: int) -> "Cursor":
         """Load the cursor, or start one at `start_ms` if there is none."""
         try:
             with open(path) as f:
                 data = json.load(f)
         except FileNotFoundError:
-            cursor = cls(path, start_ms, start_ms, {})
+            cursor = cls(path, start_ms, start_ms, {}, now_ms)
             cursor.save()
             logger.info("no cursor file; starting from now minus REVOKER_OVERLAP")
             return cursor
         except (OSError, ValueError) as e:
             raise RevokerError(f"can't read the cursor file: {e}") from None
-        return cls(path, int(data["time"]), int(data["floor"]), dict(data["seen"]))
+        return cls(
+            path,
+            int(data["time"]),
+            int(data["floor"]),
+            dict(data["seen"]),
+            # Cursor files from before `polled` existed
+            int(data.get("polled", data["time"])),
+        )
 
     def save(self) -> None:
         """Write the cursor atomically."""
@@ -490,7 +523,13 @@ class Cursor:
         try:
             with os.fdopen(fd, "w") as f:
                 json.dump(
-                    {"time": self.time, "floor": self.floor, "seen": self.seen}, f
+                    {
+                        "time": self.time,
+                        "floor": self.floor,
+                        "seen": self.seen,
+                        "polled": self.polled,
+                    },
+                    f,
                 )
             os.replace(tmp, self.path)
         except BaseException:
@@ -514,6 +553,8 @@ class Revoker:
         self._db: Any = None
         self.clock = clock
         self._checked = False
+        # How long the realm keeps user events, in ms; None: for ever
+        self._events_expiration_ms: Optional[int] = None
 
     @property
     def db(self) -> Any:
@@ -540,9 +581,32 @@ class Revoker:
     def check(self) -> None:
         """Check, before the first poll, that the revoker can do its work.
 
-        Every offline client must exist: DELETE users/<id>/consents/<client> of
-        a missing one revokes nothing.
+        The realm must store user events of the types the revoker acts on, and
+        admin events: otherwise every poll finds nothing, for ever. Every
+        offline client must exist: DELETE users/<id>/consents/<client> of a
+        missing one revokes nothing.
         """
+        events = self.keycloak.events_config()
+        if events.get("eventsEnabled") is not True:
+            raise RevokerError("the realm doesn't store user events (eventsEnabled)")
+        if events.get("adminEventsEnabled") is not True:
+            raise RevokerError(
+                "the realm doesn't store admin events (adminEventsEnabled)"
+            )
+        # An empty list would store Keycloak's default types; the revoker
+        # wants its types listed
+        enabled = events.get("enabledEventTypes") or []
+        missing = [t for t in REQUIRED_EVENT_TYPES if t not in enabled]
+        if missing:
+            raise RevokerError(
+                "the realm doesn't store these user events (enabledEventTypes): "
+                + ", ".join(missing)
+            )
+        expiration = events.get("eventsExpiration")
+        if isinstance(expiration, int) and expiration > 0:
+            self._events_expiration_ms = expiration * 1000
+        else:
+            self._events_expiration_ms = None
         for client_id in self.config.offline_clients:
             self.keycloak.client_uuid(client_id)
         self._checked = True
@@ -559,7 +623,16 @@ class Revoker:
         overlap_ms = self.config.overlap * 1000
         # A first start looks back by the overlap too, in case the revoker's
         # clock runs ahead of Keycloak's
-        cursor = Cursor.load(self.config.cursor_file, now_ms - overlap_ms)
+        cursor = Cursor.load(self.config.cursor_file, now_ms - overlap_ms, now_ms)
+        expiration_ms = self._events_expiration_ms
+        if expiration_ms is not None and now_ms - cursor.polled > expiration_ms:
+            raise FatalRevokerError(
+                f"the last complete poll was {(now_ms - cursor.polled) / 3_600_000:.1f}"
+                " h ago, longer than the realm keeps events "
+                f"({expiration_ms / 3_600_000:.1f} h): events may have been lost. "
+                "Sign every user out (the realm's 'Sign out all active sessions'), "
+                "run --reconcile, then delete the cursor file to start again"
+            )
         since = max(cursor.time - overlap_ms, cursor.floor)
         events = [("user", e) for e in self.keycloak.user_events(since)]
         events += [("admin", e) for e in self.keycloak.admin_events(since)]
@@ -588,6 +661,7 @@ class Revoker:
         # yet to store
         cursor.time = min(newest, now_ms - CLOCK_MARGIN_MS)
         cursor.seen = {k: t for k, t in seen.items() if t >= cursor.time - overlap_ms}
+        cursor.polled = now_ms
         cursor.save()
         return acted
 
@@ -667,6 +741,8 @@ def main(argv: Optional[list[str]] = None) -> int:
     def run(step: Callable[[], int]) -> bool:
         try:
             count = step()
+        except FatalRevokerError:
+            raise
         except RevokerError as e:
             logger.error("%s", e)
             return False
@@ -690,18 +766,24 @@ def main(argv: Optional[list[str]] = None) -> int:
     def reconcile() -> int:
         return revoker.reconcile(force=args.force)
 
-    if args.reconcile:
-        return 0 if run(reconcile) else 1
     try:
+        if args.reconcile:
+            return 0 if run(reconcile) else 1
         revoker.check()
+        if args.once:
+            return 0 if run(revoker.poll_once) else 1
+        # Exit rather than log errors for ever, so that whatever runs the
+        # revoker sees it fail: a role taken away, Keycloak gone for good
+        failures = 0
+        while True:
+            failures = 0 if run(revoker.poll_once) else failures + 1
+            if failures >= config.max_failures:
+                logger.error("%d polls in a row failed; exiting", failures)
+                return 1
+            time.sleep(config.interval)
     except RevokerError as e:
         logger.error("%s", e)
         return 1
-    if args.once:
-        return 0 if run(revoker.poll_once) else 1
-    while True:
-        run(revoker.poll_once)
-        time.sleep(config.interval)
 
 
 if __name__ == "__main__":

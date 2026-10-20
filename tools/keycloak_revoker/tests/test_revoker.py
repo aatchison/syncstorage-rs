@@ -20,6 +20,7 @@ from revoker import (
     REVOKE_OFFLINE,
     Action,
     Config,
+    FatalRevokerError,
     Keycloak,
     Revoker,
     RevokerError,
@@ -47,6 +48,20 @@ class FakeKeycloak(BaseAdapter):
         super().__init__()
         self.users = {"alice", "bob", "carol"}
         self.clients = set(THUNDERBIRD_CLIENTS)
+        # As in keycloak/realm-export.json
+        self.events_config = {
+            "eventsEnabled": True,
+            "eventsExpiration": 604800,
+            "eventsListeners": ["jboss-logging"],
+            "enabledEventTypes": [
+                "UPDATE_CREDENTIAL",
+                "UPDATE_PASSWORD",
+                "DELETE_ACCOUNT",
+                "LOGOUT",
+            ],
+            "adminEventsEnabled": True,
+            "adminEventsDetailsEnabled": False,
+        }
         # (user, client): offline sessions / consent
         self.consents = {(u, c) for u in self.users for c in THUNDERBIRD_CLIENTS}
         self.user_events = []
@@ -111,6 +126,8 @@ class FakeKeycloak(BaseAdapter):
             )
             first, size = int(query["first"][0]), int(query["max"][0])
             return self._response(request, 200, matching[first : first + size])
+        if request.method == "GET" and route == "/events/config":
+            return self._response(request, 200, self.events_config)
         if request.method == "GET" and route == "/clients":
             (client_id,) = query["clientId"]
             # Like Keycloak, the search may also match other clients
@@ -718,6 +735,182 @@ def test_bad_client_secret(tmp_path):
     h.revoker.keycloak.config.client_secret = "wrong"
     with pytest.raises(RevokerError, match="can't get a token"):
         h.revoker.poll_once()
+
+
+# ── event loss ───────────────────────────────────────────────────────────────
+
+DAY_MS = 86_400_000
+
+
+@pytest.mark.parametrize(
+    "change,message",
+    [
+        ({"eventsEnabled": False}, "doesn't store user events"),
+        ({"eventsEnabled": None}, "doesn't store user events"),
+        ({"adminEventsEnabled": False}, "doesn't store admin events"),
+        (
+            {"enabledEventTypes": ["UPDATE_PASSWORD", "LOGOUT"]},
+            "UPDATE_CREDENTIAL, DELETE_ACCOUNT",
+        ),
+        (
+            {"enabledEventTypes": []},
+            "UPDATE_CREDENTIAL, UPDATE_PASSWORD, DELETE_ACCOUNT",
+        ),
+    ],
+    ids=["events-off", "events-unset", "admin-events-off", "types-missing", "no-types"],
+)
+def test_realm_must_store_the_events(tmp_path, change, message):
+    h = Harness(tmp_path)
+    h.keycloak.events_config.update(change)
+    h.user_event("UPDATE_PASSWORD", "alice", offset_ms=-1)
+    with pytest.raises(RevokerError, match=message):
+        h.revoker.poll_once()
+    assert h.keycloak.calls() == []
+    assert not (tmp_path / "cursor.json").exists()
+
+
+def test_logout_events_are_not_required(tmp_path):
+    h = Harness(tmp_path)
+    h.keycloak.events_config["enabledEventTypes"].remove("LOGOUT")
+    assert h.revoker.poll_once() == 0
+
+
+@pytest.mark.parametrize("status", [403, 404])
+def test_events_config_must_be_readable(tmp_path, status):
+    # For example view-events taken away
+    h = Harness(tmp_path)
+    h.keycloak.fail("GET", r"/events/config$", status, times=99)
+    with pytest.raises(RevokerError, match="events/config: HTTP"):
+        h.revoker.poll_once()
+
+
+def test_gap_longer_than_event_retention_is_fatal(tmp_path):
+    h = Harness(tmp_path)
+    h.start()
+    polled = h.cursor()["polled"]
+    before = h.cursor()
+    h.user_event("UPDATE_PASSWORD", "alice")
+    # Down for longer than the realm's 7 days
+    h.clock.now_ms = polled + 7 * DAY_MS + 1
+    with pytest.raises(FatalRevokerError, match="events may have been lost"):
+        h.revoker.poll_once()
+    assert h.cursor() == before
+    assert h.keycloak.calls() == []
+
+
+def test_gap_within_event_retention_is_fine(tmp_path):
+    h = Harness(tmp_path)
+    h.start()
+    h.user_event("UPDATE_PASSWORD", "alice")
+    h.clock.now_ms = h.cursor()["polled"] + 7 * DAY_MS
+    assert h.revoker.poll_once() == 1
+    assert h.cursor()["polled"] == h.clock.now_ms
+
+
+def test_quiet_realm_is_no_gap(tmp_path):
+    # No event for longer than the retention, but every poll succeeded
+    h = Harness(tmp_path)
+    h.start()
+    for _ in range(10):
+        h.clock.now_ms += DAY_MS
+        assert h.revoker.poll_once() == 0
+    assert h.cursor()["polled"] == h.clock.now_ms
+
+
+def test_failed_polls_count_towards_the_gap(tmp_path):
+    h = Harness(tmp_path)
+    h.start()
+    polled = h.cursor()["polled"]
+    h.keycloak.fail("GET", r"/admin-events$", 503, times=99)
+    h.clock.now_ms = polled + 3 * DAY_MS
+    with pytest.raises(RevokerError, match="Keycloak unavailable"):
+        h.revoker.poll_once()
+    assert h.cursor()["polled"] == polled
+    h.keycloak.failures.clear()
+    h.clock.now_ms = polled + 8 * DAY_MS
+    with pytest.raises(FatalRevokerError):
+        h.revoker.poll_once()
+
+
+def test_no_expiration_means_no_gap(tmp_path):
+    h = Harness(tmp_path)
+    del h.keycloak.events_config["eventsExpiration"]
+    h.start()
+    h.clock.now_ms += 365 * DAY_MS
+    assert h.revoker.poll_once() == 0
+
+
+def test_cursor_file_without_polled(tmp_path):
+    # Written before `polled` existed: `time` stands in for it
+    h = Harness(tmp_path)
+    cursor = {"time": NOW_MS, "floor": NOW_MS - 60_000, "seen": {}}
+    (tmp_path / "cursor.json").write_text(json.dumps(cursor))
+    h.clock.now_ms = NOW_MS + 8 * DAY_MS
+    with pytest.raises(FatalRevokerError):
+        h.revoker.poll_once()
+    h.clock.now_ms = NOW_MS + DAY_MS
+    assert h.revoker.poll_once() == 0
+    assert h.cursor()["polled"] == NOW_MS + DAY_MS
+
+
+class LoopHarness:
+    """Runs main()'s forever loop against a Harness, counting polls."""
+
+    def __init__(self, tmp_path, monkeypatch, **env):
+        self.h = Harness(tmp_path)
+        self.sleeps = []
+        monkeypatch.setattr(revoker, "Revoker", lambda config: self.h.revoker)
+        monkeypatch.setattr(revoker.time, "sleep", self.sleeps.append)
+        for name, value in make_env(tmp_path, **env).items():
+            monkeypatch.setenv(name, value)
+
+    def polls(self):
+        return len([p for m, p, q in self.h.keycloak.requests if p.endswith("/events")])
+
+
+def test_loop_exits_after_consecutive_failed_polls(tmp_path, monkeypatch, caplog):
+    loop = LoopHarness(tmp_path, monkeypatch)
+    loop.h.config.attempts = 1
+    loop.h.keycloak.fail("GET", r"/events$", 503, times=999)
+    assert revoker.main([]) == 1
+    assert loop.polls() == 5
+    assert "5 polls in a row failed; exiting" in caplog.text
+
+
+def test_loop_failure_count_resets_after_a_good_poll(tmp_path, monkeypatch):
+    loop = LoopHarness(tmp_path, monkeypatch, REVOKER_MAX_FAILURES="3")
+    loop.h.config.attempts = 1
+    keycloak = loop.h.keycloak
+
+    def sleep(seconds):
+        loop.sleeps.append(seconds)
+        # After the third poll, Keycloak goes away for good
+        if len(loop.sleeps) == 3:
+            keycloak.fail("GET", r"/events$", 503, times=999)
+
+    monkeypatch.setattr(revoker.time, "sleep", sleep)
+    # Polls 1 and 2 fail, 3 succeeds, 4, 5 and 6 fail
+    keycloak.fail("GET", r"/events$", 503, times=2)
+    assert revoker.main([]) == 1
+    assert loop.polls() == 6
+    assert loop.sleeps == [loop.h.config.interval] * 5
+
+
+def test_loop_exits_at_once_on_an_event_gap(tmp_path, monkeypatch, caplog):
+    loop = LoopHarness(tmp_path, monkeypatch)
+    loop.h.start()
+    loop.h.clock.now_ms += 8 * DAY_MS
+    assert revoker.main([]) == 1
+    assert loop.sleeps == []
+    assert "events may have been lost" in caplog.text
+
+
+def test_max_failures_setting(tmp_path):
+    assert Config.from_env(make_env(tmp_path)).max_failures == 5
+    config = Config.from_env(make_env(tmp_path, REVOKER_MAX_FAILURES="2"))
+    assert config.max_failures == 2
+    with pytest.raises(RevokerError, match="REVOKER_MAX_FAILURES"):
+        Config.from_env(make_env(tmp_path, REVOKER_MAX_FAILURES="0"))
 
 
 # ── offline clients ──────────────────────────────────────────────────────────

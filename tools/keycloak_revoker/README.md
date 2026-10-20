@@ -58,6 +58,26 @@ revoker's host, and keep `REVOKER_OVERLAP` well above the worst clock difference
 between any two of them plus the time Keycloak takes to store an event: an
 event stamped more than `REVOKER_OVERLAP` before the cursor is never seen.
 
+## Lost events
+
+Keycloak deletes stored events after the realm's `eventsExpiration`, and a realm
+that stores no events gives the revoker nothing to do. So that this never
+happens unnoticed, the revoker exits non-zero, with an error that says why:
+
+- at startup, unless `GET /events/config` shows `eventsEnabled` and
+  `adminEventsEnabled`, with `UPDATE_PASSWORD`, `UPDATE_CREDENTIAL` and
+  `DELETE_ACCOUNT` listed in `enabledEventTypes`
+- before a poll, if the last poll that handled every event started longer ago
+  than `eventsExpiration` (the cursor file records when). Password changes in
+  that gap may never be acted on. Sign every user out (the realm's "Sign out
+  all active sessions", which sets the realm's `notBefore`), run `--reconcile`
+  for the deletions, then delete the cursor file to start again
+- when polling forever, after `REVOKER_MAX_FAILURES` polls in a row have failed:
+  for example Keycloak is gone for good, or a role was taken away and every
+  call gets 403
+
+`--once` exits non-zero whenever its poll fails.
+
 ## Reconcile
 
 `--reconcile` retires every active Tokenserver user `<sub>@<FXA_EMAIL_DOMAIN>`
@@ -95,6 +115,7 @@ All from environment variables.
 | `REVOKER_OVERLAP` | 60 | Seconds each poll looks back before the cursor, and a first start before the current time. Must exceed the worst clock skew, see "Cursor" |
 | `REVOKER_TIMEOUT` | 10 | HTTP timeout in seconds |
 | `REVOKER_ATTEMPTS` | 4 | Attempts per Keycloak request on a 5xx or network error |
+| `REVOKER_MAX_FAILURES` | 5 | When polling forever, exit after this many failed polls in a row |
 | `REVOKER_RECONCILE_MAX` | 10 | The most users one `--reconcile` retires without `--force` |
 | `REVOKER_LOG_LEVEL` | `INFO` | |
 | `SYNC_TOKENSERVER__DATABASE_URL` | (required) | The Tokenserver database, as for Tokenserver |

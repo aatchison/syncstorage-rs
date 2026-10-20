@@ -13,9 +13,17 @@ Keycloak has no webhook, so the revoker polls the realm's stored events
 | --- | --- |
 | User event `UPDATE_PASSWORD`, or `UPDATE_CREDENTIAL` with `details.credential_type` `password` (the user changed their password) | `POST /users/{id}/logout`, then `DELETE /users/{id}/consents/{client}` for each Thunderbird client, which revokes the offline sessions too. Done whether or not the user ticked "Sign out from other devices" |
 | Admin event `ACTION users/{id}/reset-password` | The same |
+| Admin event `UPDATE users/{id}` (`PUT /users/{id}`: an admin or a script set a password through its `credentials` array, disabled the user, or edited their profile) | The same. The event doesn't say whether a password was set, so every update counts as one; see below |
 | Admin event `ACTION users/{id}/logout` | `DELETE /users/{id}/consents/{client}` for each Thunderbird client: Keycloak's sign-out leaves offline sessions alive |
 | Admin event `DELETE users/{id}`, user event `DELETE_ACCOUNT` | Retires the Tokenserver user `{id}@{SYNC_TOKENSERVER__FXA_EMAIL_DOMAIN}`, with `retire_user` from `tools/tokenserver/database.py` |
-| Disabling a user (admin event `UPDATE users/{id}`), and every other event | Nothing. Keycloak refuses a disabled user's refreshes by itself |
+| Every other event | Nothing |
+
+Acting on every admin `UPDATE users/{id}` over-revokes: an admin who edits a
+user's profile, attributes or required actions also signs them out
+of every session, and Thunderbird has to sign in again. That is the accepted
+trade-off, as a password set through `PUT /users/{id}` would otherwise leave
+every existing session working. Keycloak refuses a disabled user's refreshes by
+itself; the revoker's sign-out adds nothing there but does no harm.
 
 Keycloak also emits `UPDATE_CREDENTIAL` when a user sets up OTP or WebAuthn
 (`credential_type` `otp`, `webauthn`, ...); those are ignored, so the user isn't

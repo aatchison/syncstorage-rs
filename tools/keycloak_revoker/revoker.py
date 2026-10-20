@@ -8,7 +8,8 @@ events and acts on them through the Keycloak admin API and the Tokenserver
 database:
 
   password change (user events UPDATE_PASSWORD, UPDATE_CREDENTIAL of a password,
-  admin ACTION users/<id>/reset-password)
+  admin ACTION users/<id>/reset-password), and any admin UPDATE users/<id>,
+  which may have set a password
       sign the user out of every session (POST users/<id>/logout), then revoke
       their offline sessions of each configured client
       (DELETE users/<id>/consents/<client>)
@@ -17,7 +18,6 @@ database:
   user deleted (admin DELETE users/<id>, user event DELETE_ACCOUNT)
       retire the Tokenserver user "<id>@<FXA_EMAIL_DOMAIN>"
 
-Disabling a user needs no action: Keycloak then refuses every refresh itself.
 Any other event is ignored. With --reconcile it instead retires every
 Tokenserver user whose Keycloak user no longer exists, which catches deletions
 whose events were missed; it refuses when Keycloak's answers look wrong, or
@@ -131,6 +131,11 @@ def admin_event_action(event: Mapping[str, Any]) -> Optional[Action]:
     user_id, sub_resource = match.groups()
     operation = event.get("operationType")
     if operation == "ACTION" and sub_resource == "reset-password":
+        return Action(REVOKE_ALL, user_id)
+    if operation == "UPDATE" and sub_resource is None:
+        # PUT users/<id> can set a password through its credentials array, and
+        # the event doesn't say whether it did: every update counts as one, so
+        # profile edits and disabling sign the user out too
         return Action(REVOKE_ALL, user_id)
     if operation == "ACTION" and sub_resource == "logout":
         return Action(REVOKE_OFFLINE, user_id)
@@ -351,7 +356,7 @@ class Keycloak:
             "/admin-events",
             {
                 "resourceTypes": ["USER"],
-                "operationTypes": ["ACTION", "DELETE"],
+                "operationTypes": ["ACTION", "DELETE", "UPDATE"],
                 "dateFrom": str(since_ms),
                 "direction": "asc",
             },

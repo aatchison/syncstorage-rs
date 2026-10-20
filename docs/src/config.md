@@ -179,7 +179,7 @@ Revocation never involves FxA. A user is cut off by revoking their sessions in K
 | --- | --- |
 | User disabled | Keycloak, natively: every refresh fails |
 | User deleted (by an admin, or by the user through the `delete_account` action) | Keycloak, natively. The revoker also retires the Tokenserver user `<sub>@<FXA_EMAIL_DOMAIN>` |
-| Password reset by an admin | The revoker. Keycloak on its own ends no session at all |
+| Password reset by an admin (`reset-password`, or `PUT /users/{id}` with a `credentials` array) | The revoker. Keycloak on its own ends no session at all. The revoker treats every admin update of a user as a possible password change, so an admin's profile edit signs the user out too |
 | Password changed by the user (account console, or the forgot-password email flow) | The revoker. Keycloak's "Sign out from other devices" ends online sessions only, and only if it is ticked; the revoker ends every session either way |
 | Admin "Sign out" | Keycloak ends the online sessions; the revoker ends the offline ones |
 

@@ -318,8 +318,9 @@ def test_user_event_action(event, expected):
         ("ACTION", "users/u1/reset-password", "USER", Action(REVOKE_ALL, "u1")),
         ("ACTION", "users/u1/logout", "USER", Action(REVOKE_OFFLINE, "u1")),
         ("DELETE", "users/u1", "USER", Action(RETIRE, "u1")),
-        # Disabling (an UPDATE) needs no action: Keycloak refuses refreshes itself
-        ("UPDATE", "users/u1", "USER", None),
+        # PUT users/<id> may have set a password; disabling is an UPDATE too
+        ("UPDATE", "users/u1", "USER", Action(REVOKE_ALL, "u1")),
+        ("UPDATE", "users/u1/groups/g1", "USER", None),
         ("CREATE", "users/u1", "USER", None),
         ("ACTION", "users/u1/reset-password-email", "USER", None),
         ("ACTION", "users/u1/execute-actions-email", "USER", None),
@@ -400,12 +401,14 @@ def test_admin_sign_out_revokes_offline_sessions(tmp_path):
     assert ("bob", "thunderbird") not in h.keycloak.consents
 
 
-def test_admin_disable_needs_no_action(tmp_path):
+def test_admin_update_revokes_all_sessions(tmp_path):
+    # A password set through PUT users/<id>, a disable or a profile edit: the
+    # event looks the same
     h = Harness(tmp_path)
     h.start()
     h.admin_event("UPDATE", "users/carol")
-    assert h.revoker.poll_once() == 0
-    assert h.keycloak.calls() == []
+    assert h.revoker.poll_once() == 1
+    assert h.keycloak.calls() == revoke_all("carol")
     assert h.db.retired == []
 
 
@@ -483,7 +486,7 @@ def test_event_queries(tmp_path):
     }
     assert queries["/admin-events"] == {
         "resourceTypes": ["USER"],
-        "operationTypes": ["ACTION", "DELETE"],
+        "operationTypes": ["ACTION", "DELETE", "UPDATE"],
         "dateFrom": [str(NOW_MS)],
         "direction": ["asc"],
         "first": ["0"],

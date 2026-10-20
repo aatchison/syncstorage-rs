@@ -32,6 +32,14 @@ def reset_password(admin, user_id):
     return admin("PUT", f"/users/{user_id}/reset-password", json=body)
 
 
+def update_password(admin, user_id):
+    # PUT users/<id> with a credentials array: an admin UPDATE users/<id> event
+    rep = admin("GET", f"/users/{user_id}").json()
+    value = secrets.token_urlsafe(24)
+    rep["credentials"] = [{"type": "password", "value": value, "temporary": False}]
+    return admin("PUT", f"/users/{user_id}", json=rep)
+
+
 def sign_out(admin, user_id):
     return admin("POST", f"/users/{user_id}/logout")
 
@@ -48,6 +56,7 @@ def delete(admin, user_id):
 
 ACTIONS = {
     "reset-password": reset_password,
+    "update-password": update_password,
     "sign-out": sign_out,
     "disable": disable,
     "delete": delete,
@@ -56,6 +65,8 @@ ACTIONS = {
 KEYCLOAK_LEAVES_ALIVE = {
     ("reset-password", False),
     ("reset-password", True),
+    ("update-password", False),
+    ("update-password", True),
     ("sign-out", True),
 }
 

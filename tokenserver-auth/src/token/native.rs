@@ -46,7 +46,7 @@ impl Tokenlib {
         // Now that we finialized the token, lets generate our per token secret
         // The code below was ported from:
         // https://github.com/mozilla-services/tokenlib/blob/91ec9e2c922e55306eddba1394590a88f3b10602/tokenlib/__init__.py#L158-L159
-        let mut info = Vec::with_capacity(HKDF_INFO_DERIVE.len() + token.as_bytes().len());
+        let mut info = Vec::with_capacity(HKDF_INFO_DERIVE.len() + token.len());
         info.extend_from_slice(HKDF_INFO_DERIVE);
         info.extend_from_slice(token.as_bytes());
 
@@ -97,7 +97,7 @@ mod tests {
         assert_eq!(token_data.plaintext, plaintext);
         // Finally, we verify that the same per_token_secret can be derived given the payload
         // and the shared secret
-        let mut info = Vec::with_capacity(HKDF_INFO_DERIVE.len() + b64_token.as_bytes().len());
+        let mut info = Vec::with_capacity(HKDF_INFO_DERIVE.len() + b64_token.len());
         info.extend_from_slice(HKDF_INFO_DERIVE);
         info.extend_from_slice(b64_token.as_bytes());
 

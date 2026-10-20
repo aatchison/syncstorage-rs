@@ -15,10 +15,12 @@ import html
 import json
 import os
 import re
+import secrets
 import subprocess
 import sys
 import time
 from typing import Any, Optional
+from urllib.parse import urlsplit
 
 import requests
 from sqlalchemy.sql import text as sqltext
@@ -43,6 +45,8 @@ LIVE_CLIENT_ID = "revoker-live-thunderbird"
 BROWSER_CLIENT_ID = "revoker-live-browser"
 BROWSER_REDIRECT_URI = "http://127.0.0.1/revoker-live/callback"
 NODE_URL = "https://revoker-live.example.com"
+# The MySQL account the revoker runs with, with the README's grants only
+REVOKER_DB_USER = "revoker_live"
 
 
 class Secret:
@@ -387,6 +391,33 @@ def exchange(access_token: Secret) -> requests.Response:
             "X-KeyID": f"1234-{client_state.decode()}",
         },
     )
+
+
+def create_revoker_db_account(db: Any) -> Secret:
+    """Create the revoker's MySQL account, as README.md says; return its URL.
+
+    It may only select and update Tokenserver's `users` table.
+    """
+    url = urlsplit(os.environ["SYNC_TOKENSERVER__DATABASE_URL"])
+    database = url.path.lstrip("/")
+    password = Secret(secrets.token_hex(24))
+    drop_revoker_db_account(db)
+    db._execute_sql(
+        sqltext(f"CREATE USER '{REVOKER_DB_USER}'@'%' IDENTIFIED BY :password"),
+        password=password.value,
+    ).close()
+    db._execute_sql(
+        sqltext(
+            f"GRANT SELECT, UPDATE ON `{database}`.users TO '{REVOKER_DB_USER}'@'%'"
+        )
+    ).close()
+    netloc = f"{REVOKER_DB_USER}:{password.value}@{url.hostname}:{url.port or 3306}"
+    return Secret(url._replace(netloc=netloc).geturl())
+
+
+def drop_revoker_db_account(db: Any) -> None:
+    """Drop the revoker's MySQL account, if it exists."""
+    db._execute_sql(sqltext(f"DROP USER IF EXISTS '{REVOKER_DB_USER}'@'%'")).close()
 
 
 def tokenserver_email(user_id: str) -> str:

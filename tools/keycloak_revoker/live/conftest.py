@@ -12,6 +12,9 @@ from LIVE_CLIENT_ID. Settings, all required:
   REVOKER_CLIENT_ID, REVOKER_CLIENT_SECRET_FILE
   TOKENSERVER_HOST                    e.g. http://localhost:8000
   SYNC_TOKENSERVER__DATABASE_URL, SYNC_TOKENSERVER__FXA_EMAIL_DOMAIN
+
+SYNC_TOKENSERVER__DATABASE_URL must be able to create MySQL accounts: the
+revoker runs with its own account, which may only select and update `users`.
 """
 
 import os
@@ -28,6 +31,8 @@ from .helpers import (
     KeycloakAdmin,
     RevokerEnv,
     client_uuid,
+    create_revoker_db_account,
+    drop_revoker_db_account,
     run_revoker,
 )
 
@@ -98,7 +103,15 @@ def db():
 
 
 @pytest.fixture(scope="session")
-def revoker_env(tmp_path_factory):
+def revoker_db_url(db):
+    """Return the URL of a MySQL account with only the revoker's grants."""
+    url = create_revoker_db_account(db)
+    yield url
+    drop_revoker_db_account(db)
+
+
+@pytest.fixture(scope="session")
+def revoker_env(tmp_path_factory, revoker_db_url):
     """Return the environment the revoker runs with, its cursor in a temp dir."""
     issuer = os.environ["SYNC_TOKENSERVER__OIDC_ISSUER_URL"].rstrip("/")
     base, realm = issuer.rsplit("/realms/", 1)
@@ -110,6 +123,7 @@ def revoker_env(tmp_path_factory):
             "REVOKER_OFFLINE_CLIENTS": LIVE_CLIENT_ID,
             "REVOKER_CURSOR_FILE": str(tmp_path_factory.mktemp("revoker") / "cursor"),
             "REVOKER_LOG_LEVEL": "DEBUG",
+            "SYNC_TOKENSERVER__DATABASE_URL": revoker_db_url.value,
         }
     )
     return env

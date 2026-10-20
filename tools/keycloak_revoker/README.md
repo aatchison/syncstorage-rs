@@ -76,7 +76,7 @@ happens unnoticed, the revoker exits non-zero, with an error that says why:
   for example Keycloak is gone for good, or a role was taken away and every
   call gets 403
 
-`--once` exits non-zero whenever its poll fails.
+`--once` exits non-zero whenever its poll fails. See "Alerting" under "Deployment".
 
 ## Reconcile
 
@@ -152,7 +152,7 @@ without a secret: `keycloak/start-services.sh` generates one into
 From this directory:
 
 ```shell
-poetry install --without dev
+poetry install --only main                 # without the test and lint tools
 poetry run python revoker.py               # poll forever
 poetry run python revoker.py --once        # poll once
 poetry run python revoker.py --reconcile   # reconcile once
@@ -161,6 +161,109 @@ poetry run python revoker.py --reconcile --force   # without the cap
 
 Run a single instance: two revokers sharing a cursor file would only repeat each
 other's (idempotent) work, but there is no locking.
+
+## Deployment
+
+### Process manager
+
+Run the poller under a process manager that restarts it when it exits, and
+alerts when it keeps failing; run `--reconcile` from a timer. With systemd, for
+example (paths and the alert unit are placeholders):
+
+```ini
+# /etc/systemd/system/keycloak-revoker.service
+[Unit]
+Description=Keycloak revoker for Tokenserver
+Wants=network-online.target
+After=network-online.target
+# Five failed runs within 10 minutes leave the unit failed, which alerts
+StartLimitIntervalSec=600
+StartLimitBurst=5
+OnFailure=alert@%n.service
+
+[Service]
+User=keycloak-revoker
+WorkingDirectory=/opt/syncstorage-rs/tools/keycloak_revoker
+# Mode 600: holds the database URL with its password, see below
+EnvironmentFile=/etc/keycloak-revoker/env
+LoadCredential=client-secret:/etc/keycloak-revoker/client-secret
+Environment=REVOKER_CLIENT_SECRET_FILE=%d/client-secret
+# REVOKER_CURSOR_FILE=/var/lib/keycloak-revoker/cursor in the env file
+StateDirectory=keycloak-revoker
+ExecStart=/opt/syncstorage-rs/tools/keycloak_revoker/.venv/bin/python revoker.py
+Restart=on-failure
+RestartSec=30
+NoNewPrivileges=yes
+ProtectSystem=strict
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target
+```
+
+```ini
+# /etc/systemd/system/keycloak-revoker-reconcile.service
+[Unit]
+Description=Keycloak revoker: retire Tokenserver users deleted in Keycloak
+OnFailure=alert@%n.service
+
+[Service]
+Type=oneshot
+User=keycloak-revoker
+WorkingDirectory=/opt/syncstorage-rs/tools/keycloak_revoker
+EnvironmentFile=/etc/keycloak-revoker/env
+LoadCredential=client-secret:/etc/keycloak-revoker/client-secret
+Environment=REVOKER_CLIENT_SECRET_FILE=%d/client-secret
+ExecStart=/opt/syncstorage-rs/tools/keycloak_revoker/.venv/bin/python revoker.py --reconcile
+
+# /etc/systemd/system/keycloak-revoker-reconcile.timer
+[Timer]
+OnCalendar=daily
+RandomizedDelaySec=1h
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+```
+
+The `.venv` comes from `POETRY_VIRTUALENVS_IN_PROJECT=true poetry install --only
+main`, run as the service user.
+
+### Alerting
+
+The revoker exits non-zero, with an error naming the cause, on a bad setting,
+when the startup checks fail, on an event gap longer than the realm's
+retention, and after `REVOKER_MAX_FAILURES` failed polls in a row (see "Lost
+events"); `--reconcile` exits non-zero when it refuses to retire users. Alert
+on every such exit, not only on the unit ending up failed: restarting doesn't
+fix an event gap or a missing role, and the gap needs the steps under "Lost
+events" before the revoker may run again. Until then sessions that should
+have been revoked keep working.
+
+### Tokenserver database account
+
+The revoker reads the `users` table and retires users with an `UPDATE` of it,
+nothing else. Give it its own MySQL account rather than Tokenserver's:
+
+```sql
+CREATE USER 'keycloak_revoker'@'%' IDENTIFIED BY 'YOUR_PASSWORD_HERE';
+GRANT SELECT, UPDATE ON tokenserver_rs.users TO 'keycloak_revoker'@'%';
+```
+
+and set `SYNC_TOKENSERVER__DATABASE_URL` to
+`mysql://keycloak_revoker:YOUR_PASSWORD_HERE@host:3306/tokenserver_rs`. The
+live tests run the revoker with an account with only these grants.
+
+### The client secret
+
+`manage-users` lets the client's service account reset any user's password,
+change their email and delete them, and `view-clients` lets it read every
+client's secret: together close to realm-admin power. Treat the client secret
+like an admin credential. Keep it in a file readable by the service user only
+(`REVOKER_CLIENT_SECRET_FILE`, or systemd's `LoadCredential` as above), never
+in the environment of other processes or in logs, and rotate it like other
+admin credentials: regenerate it in Keycloak (the client's "Credentials" tab),
+replace the file and restart the revoker.
 
 ## Tests
 

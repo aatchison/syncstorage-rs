@@ -19,6 +19,8 @@ import os
 import pytest
 
 from .helpers import (
+    BROWSER_CLIENT_ID,
+    BROWSER_REDIRECT_URI,
     DEFAULT_OAUTH_SCOPE,
     LIVE_CLIENT_ID,
     NODE_URL,
@@ -31,7 +33,9 @@ from .helpers import (
 
 @pytest.fixture(scope="session")
 def admin():
-    """Return a KeycloakAdmin, after adding the Thunderbird stand-in client."""
+    """Return a KeycloakAdmin, after adding the Thunderbird stand-in client and
+    the browser client.
+    """
     admin = KeycloakAdmin()
     res = admin(
         "POST",
@@ -47,6 +51,22 @@ def admin():
             "attributes": {"access.token.header.type.rfc9068": "true"},
             "defaultClientScopes": ["basic"],
             "optionalClientScopes": [DEFAULT_OAUTH_SCOPE, "offline_access"],
+        },
+    )
+    if res.status_code != 409:
+        res.raise_for_status()
+    res = admin(
+        "POST",
+        "/clients",
+        json={
+            "clientId": BROWSER_CLIENT_ID,
+            "protocol": "openid-connect",
+            "publicClient": True,
+            "standardFlowEnabled": True,
+            "directAccessGrantsEnabled": False,
+            "fullScopeAllowed": False,
+            "redirectUris": [BROWSER_REDIRECT_URI],
+            "defaultClientScopes": ["basic"],
         },
     )
     if res.status_code != 409:

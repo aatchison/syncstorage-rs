@@ -17,6 +17,8 @@ import pytest
 
 from .helpers import (
     MAX_GENERATION,
+    admin_events_on,
+    change_password_as_user,
     create_user,
     exchange,
     introspect,
@@ -24,6 +26,7 @@ from .helpers import (
     offline_sessions,
     refresh,
     run_revoker,
+    user_events,
     user_rows,
 )
 
@@ -136,6 +139,38 @@ def test_revocation(admin, db, revoker, live_client, action, offline):
     else:
         assert_active_record(db, user_id)
         assert offline_sessions(admin, user_id, live_client) == []
+
+
+def test_password_change_by_the_user(admin, db, revoker, live_client):
+    """The user changes their password: both sessions die after one run."""
+    name, password, user_id = new_user(admin, "self-service")
+    online = login(admin, name, password, offline=False)
+    offline = login(admin, name, password, offline=True)
+    assert exchange(online["access_token"]).status_code == 200
+    assert len(offline_sessions(admin, user_id, live_client)) == 1
+
+    change_password_as_user(admin, name, password, secrets.token_urlsafe(24))
+    # Keycloak on its own leaves both sessions working ("Sign out from other
+    # devices" wasn't ticked)
+    assert refresh(admin, online["refresh_token"]).status_code == 200
+    assert refresh(admin, offline["refresh_token"]).status_code == 200
+    # It was a user event, and no admin touched the user since creating them
+    assert {"UPDATE_PASSWORD", "UPDATE_CREDENTIAL"} <= set(user_events(admin, user_id))
+    assert admin_events_on(admin, user_id) == ["CREATE"]
+
+    output = revoker("--once")
+    assert (
+        f"revoke-all-sessions: keycloak user {user_id}, for user event UPDATE_PASSWORD"
+        in output
+    )
+
+    for tokens in (online, offline):
+        res = refresh(admin, tokens["refresh_token"])
+        assert res.status_code == 400, res.text
+        assert res.json()["error"] == "invalid_grant"
+        assert not introspect(admin, tokens["access_token"])
+    assert offline_sessions(admin, user_id, live_client) == []
+    assert_active_record(db, user_id)
 
 
 def test_reconcile_retires_user_deleted_while_revoker_was_down(

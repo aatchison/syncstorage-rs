@@ -1214,8 +1214,14 @@ def test_logs_have_no_secrets_or_emails(tmp_path, caplog):
     h.keycloak.fail("POST", r"/logout$", 503, times=1)
     h.revoker.poll_once()
     h.revoker.reconcile(force=True)
-    assert "keycloak user alice" in caplog.text
-    assert "keycloak user carol" in caplog.text
+    assert (
+        "revoke-all-sessions: keycloak user alice, for user event UPDATE_PASSWORD"
+        in caplog.text
+    )
+    assert (
+        "retire-tokenserver-user: keycloak user carol, for admin event DELETE "
+        "users/carol" in caplog.text
+    )
     assert "keycloak user dave" in caplog.text
     assert EMAIL_DOMAIN not in caplog.text
     assert SECRET not in caplog.text

@@ -122,7 +122,8 @@ All from environment variables.
 | `SYNC_TOKENSERVER__FXA_EMAIL_DOMAIN` | (required) | The same value as Tokenserver's |
 
 The logs name Keycloak user IDs only; they never contain emails or the client
-secret.
+secret. Each action is logged with the event it was for, for example
+`revoke-all-sessions: keycloak user <id>, for user event UPDATE_PASSWORD`.
 
 ## Keycloak setup
 
@@ -166,5 +167,6 @@ other's (idempotent) work, but there is no locking.
 - `tests/`: unit tests, against a fake Keycloak and a fake Tokenserver database:
   `poetry run pytest tests`, from this directory
 - `live/`: tests against a real Keycloak, Tokenserver and database, for each way
-  of cutting a user off with an online and an offline session. Run by
+  of cutting a user off with an online and an offline session, including a
+  password change by the user in Keycloak's own pages. Run by
   `keycloak/run-suite.sh`, which provides their settings

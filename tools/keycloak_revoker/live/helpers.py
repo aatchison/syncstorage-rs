@@ -4,8 +4,10 @@
 """Helpers and constants for the live revocation tests. No fixtures here."""
 
 import base64
+import html
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -30,6 +32,9 @@ DEFAULT_OAUTH_SCOPE = "https://identity.mozilla.com/apps/oldsync"
 # The Thunderbird stand-in: a public client like a desktop app's, which may ask
 # for offline_access
 LIVE_CLIENT_ID = "revoker-live-thunderbird"
+# A browser client, for the user's own password change through Keycloak's pages
+BROWSER_CLIENT_ID = "revoker-live-browser"
+BROWSER_REDIRECT_URI = "http://127.0.0.1/revoker-live/callback"
 NODE_URL = "https://revoker-live.example.com"
 
 
@@ -188,6 +193,94 @@ def introspect(admin: KeycloakAdmin, token: str) -> bool:
     assert res.status_code == 200, res.status_code
     active: bool = res.json()["active"]
     return active
+
+
+def _browse(session: requests.Session, method: str, url: str, **kwargs: Any) -> Any:
+    """Send a request as a browser would, without following redirects.
+
+    Keycloak marks its login cookies Secure. Browsers send those to
+    http://localhost too, which requests doesn't, so they are unmarked here
+    (the live tests reach Keycloak over plain HTTP on localhost only).
+    """
+    res = session.request(method, url, allow_redirects=False, timeout=10, **kwargs)
+    for cookie in session.cookies:
+        if cookie.domain in ("localhost.local", "127.0.0.1"):
+            cookie.secure = False
+    return res
+
+
+def _form_action(page: requests.Response, form_id: str) -> str:
+    """Return the action URL of a form on a Keycloak page."""
+    match = re.search(rf'<form[^>]*\bid="{form_id}"[^>]*>', page.text)
+    assert match, f"no form {form_id} on the page (HTTP {page.status_code})"
+    action = re.search(r'\baction="([^"]+)"', match.group(0))
+    assert action, f"form {form_id} has no action"
+    return html.unescape(action.group(1))
+
+
+def _follow(session: requests.Session, res: requests.Response) -> requests.Response:
+    """Follow redirects within Keycloak, stopping at the browser client's redirect."""
+    while res.is_redirect and not res.headers["Location"].startswith(
+        BROWSER_REDIRECT_URI
+    ):
+        res = _browse(session, "GET", res.headers["Location"])
+    return res
+
+
+def change_password_as_user(
+    admin: KeycloakAdmin, name: str, password: str, new_password: str
+) -> None:
+    """Change the user's password as the user would, in Keycloak's own pages.
+
+    Signs in to BROWSER_CLIENT_ID with kc_action=UPDATE_PASSWORD (what the
+    account console's "Update password" does), then fills in the new password,
+    without ticking "Sign out from other devices".
+    """
+    session = requests.Session()
+    page = _browse(
+        session,
+        "GET",
+        f"{admin.issuer}/protocol/openid-connect/auth",
+        params={
+            "client_id": BROWSER_CLIENT_ID,
+            "redirect_uri": BROWSER_REDIRECT_URI,
+            "response_type": "code",
+            "scope": "openid",
+            "kc_action": "UPDATE_PASSWORD",
+        },
+    )
+    assert page.status_code == 200, page.status_code
+    res = _browse(
+        session,
+        "POST",
+        _form_action(page, "kc-form-login"),
+        data={"username": name, "password": password, "credentialId": ""},
+    )
+    page = _follow(session, res)
+    assert page.status_code == 200, page.status_code
+    res = _browse(
+        session,
+        "POST",
+        _form_action(page, "kc-passwd-update-form"),
+        data={"password-new": new_password, "password-confirm": new_password},
+    )
+    res = _follow(session, res)
+    assert res.is_redirect, res.status_code
+    assert "kc_action_status=success" in res.headers["Location"]
+
+
+def user_events(admin: KeycloakAdmin, user_id: str) -> list:
+    """Return the types of the user's stored user events, newest first."""
+    res = admin("GET", "/events", params={"user": user_id})
+    assert res.status_code == 200, res.status_code
+    return [event["type"] for event in res.json()]
+
+
+def admin_events_on(admin: KeycloakAdmin, user_id: str) -> list:
+    """Return the operation types of the stored admin events on a user."""
+    res = admin("GET", "/admin-events", params={"resourcePath": f"users/{user_id}*"})
+    assert res.status_code == 200, res.status_code
+    return [event["operationType"] for event in res.json()]
 
 
 def exchange(access_token: str) -> requests.Response:

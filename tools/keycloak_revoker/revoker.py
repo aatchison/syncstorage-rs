@@ -577,7 +577,6 @@ class Revoker:
                 self.keycloak.revoke_offline(action.user_id, client_id)
         if action.kind == RETIRE:
             self.retire(action.user_id)
-        logger.info("%s: keycloak user %s", action.kind, action.user_id)
 
     def check(self) -> None:
         """Check, before the first poll, that the revoker can do its work.
@@ -649,10 +648,20 @@ class Revoker:
                 continue
             if kind == "user":
                 action = user_event_action(event)
+                what = str(event.get("type"))
             else:
                 action = admin_event_action(event)
+                # The resource path names the user ID only
+                what = f"{event.get('operationType')} {event.get('resourcePath')}"
             if action:
                 self.apply(action)
+                logger.info(
+                    "%s: keycloak user %s, for %s event %s",
+                    action.kind,
+                    action.user_id,
+                    kind,
+                    what,
+                )
                 acted += 1
             seen[key] = event_time
             newest = max(newest, event_time)

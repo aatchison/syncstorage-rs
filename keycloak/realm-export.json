@@ -815,15 +815,15 @@
         "profile",
         "roles",
         "basic",
-        "email",
-        "https://identity.mozilla.com/apps/oldsync"
+        "email"
       ],
       "optionalClientScopes": [
         "address",
         "phone",
         "offline_access",
         "organization",
-        "microprofile-jwt"
+        "microprofile-jwt",
+        "https://identity.mozilla.com/apps/oldsync"
       ]
     },
     {

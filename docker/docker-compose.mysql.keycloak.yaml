@@ -46,7 +46,8 @@ services:
       SYNC_TOKENSERVER__OAUTH_PROVIDER: oidc
       SYNC_TOKENSERVER__OIDC_ISSUER_URL: http://keycloak:7080/realms/sync
       SYNC_TOKENSERVER__OIDC_AUDIENCE: tokenserver
-      # The realm's client with the oldsync scope
+      # The realm's client with the oldsync scope, an optional scope it must request
+      # (scope=https://identity.mozilla.com/apps/oldsync)
       SYNC_TOKENSERVER__OIDC_ALLOWED_CLIENTS: public-client
       SYNC_TOKENSERVER__INIT_NODE_URL: http://localhost:8000
       RUST_BACKTRACE: 1

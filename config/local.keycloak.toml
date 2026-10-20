@@ -51,7 +51,8 @@ tokenserver.fxa_metrics_hash_secret = "INSERT_SECRET_KEY_HERE"
 tokenserver.oauth_provider = "oidc"
 tokenserver.oidc_issuer_url = "http://localhost:7080/realms/sync"
 tokenserver.oidc_audience = "tokenserver"
-# The realm's client with the oldsync scope.
+# The realm's client with the oldsync scope, an optional scope it must request
+# (scope=https://identity.mozilla.com/apps/oldsync).
 tokenserver.oidc_allowed_clients = ["public-client"]
 
 # -----------------------------------------------------------------------------

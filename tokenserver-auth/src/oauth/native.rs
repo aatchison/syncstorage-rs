@@ -53,14 +53,46 @@ struct OidcTokenClaims {
     /// other claims such as `iat`.
     #[serde(rename = "fxa-generation")]
     generation: Option<i64>,
+    iss: String,
+    aud: Audience,
+}
+
+/// The `aud` claim: one audience or a list of them (RFC 7519, section 4.1.3)
+#[derive(Serialize, Deserialize, Debug)]
+#[serde(untagged)]
+enum Audience {
+    One(String),
+    Many(Vec<String>),
+}
+
+impl Audience {
+    fn contains(&self, audience: &str) -> bool {
+        match self {
+            Audience::One(aud) => aud == audience,
+            Audience::Many(auds) => auds.iter().any(|aud| aud == audience),
+        }
+    }
+}
+
+/// The issuer and audience an OIDC access token must name (RFC 9068, section 4)
+#[derive(Clone)]
+struct OidcExpected {
+    issuer: String,
+    audience: String,
 }
 
 impl OidcTokenClaims {
-    fn validate(self) -> Result<VerifyOutput, TokenserverError> {
+    fn validate(self, expected: &OidcExpected) -> Result<VerifyOutput, TokenserverError> {
         if !self.scope.split(' ').any(|scope| scope == SYNC_SCOPE) {
             return Err(TokenserverError::invalid_credentials(
                 "Unauthorized".to_string(),
             ));
+        }
+        if self.iss.trim_end_matches('/') != expected.issuer.trim_end_matches('/') {
+            return Err(unauthorized_err_with_ctx("Unexpected OIDC token issuer"));
+        }
+        if !self.aud.contains(&expected.audience) {
+            return Err(unauthorized_err_with_ctx("Unexpected OIDC token audience"));
         }
         Ok(VerifyOutput {
             fxa_uid: self.user,
@@ -76,8 +108,8 @@ pub struct Verifier<J> {
     jwks_url: Url,
     jwk_verifiers: Vec<J>,
     http_client: reqwest::Client,
-    /// True when `oauth_provider` is "oidc"
-    oidc: bool,
+    /// Set when `oauth_provider` is "oidc"
+    oidc: Option<OidcExpected>,
 }
 
 impl<J> Verifier<J>
@@ -85,11 +117,17 @@ where
     J: JWTVerifier,
 {
     pub fn new(settings: &Settings, jwk_verifiers: Vec<J>) -> Result<Self, TokenserverError> {
-        let oidc = settings.oauth_provider == OAuthProvider::Oidc;
-        let (verify_url, jwks_url) = if oidc {
+        let (verify_url, jwks_url, oidc) = if settings.oauth_provider == OAuthProvider::Oidc {
             let issuer = settings.oidc_issuer_url.as_ref().ok_or_else(|| {
                 internal_err_with_ctx("oauth_provider is \"oidc\" but oidc_issuer_url is not set")
             })?;
+            let audience = settings
+                .oidc_audience
+                .as_ref()
+                .filter(|audience| !audience.is_empty())
+                .ok_or_else(|| {
+                    internal_err_with_ctx("oauth_provider is \"oidc\" but oidc_audience is not set")
+                })?;
             // Make sure the issuer path ends in "/" so that `join` appends to it instead of
             // replacing its last segment (e.g. ".../realms/sync").
             let base_url = Url::parse(&format!("{}/", issuer.trim_end_matches('/')))
@@ -97,8 +135,12 @@ where
             let jwks_url = base_url
                 .join("protocol/openid-connect/certs")
                 .map_err(internal_err_with_ctx)?;
+            let expected = OidcExpected {
+                issuer: issuer.to_owned(),
+                audience: audience.to_owned(),
+            };
             // OIDC providers have no verify endpoint, so this URL is never requested
-            (base_url, jwks_url)
+            (base_url, jwks_url, Some(expected))
         } else {
             let base_url = Url::parse(&settings.fxa_oauth_server_url)
                 .map_err(|_| TokenserverError::internal_error())?;
@@ -108,7 +150,7 @@ where
             let jwks_url = base_url
                 .join("v1/jwks")
                 .map_err(|_| TokenserverError::internal_error())?;
-            (verify_url, jwks_url)
+            (verify_url, jwks_url, None)
         };
         let http_client = reqwest::Client::builder()
             .timeout(Duration::from_secs(settings.fxa_oauth_request_timeout))
@@ -259,7 +301,7 @@ where
                 .collect();
         }
 
-        if self.oidc {
+        if let Some(expected) = &self.oidc {
             // OIDC providers have no remote verify endpoint to fall back to
             return self
                 .verify_jwt_locally::<OidcTokenClaims>(&verifiers, &token)
@@ -269,7 +311,7 @@ where
                     }
                     unauthorized_err_with_ctx(e)
                 })?
-                .validate();
+                .validate(expected);
         }
 
         let claims = match self.verify_jwt_locally(&verifiers, &token) {
@@ -628,11 +670,14 @@ mod tests {
         Ok(())
     }
 
+    const OIDC_ISSUER: &str = "http://127.0.0.1:1/realms/sync";
+
     fn oidc_settings() -> Settings {
         Settings {
             oauth_provider: OAuthProvider::Oidc,
             // Nothing listens here; these tests must not make any requests
-            oidc_issuer_url: Some("http://127.0.0.1:1/realms/sync".to_owned()),
+            oidc_issuer_url: Some(OIDC_ISSUER.to_owned()),
+            oidc_audience: Some("tokenserver".to_owned()),
             ..Settings::default()
         }
     }
@@ -665,13 +710,62 @@ mod tests {
     }
 
     #[test]
-    fn test_oidc_requires_issuer() {
+    fn test_oidc_requires_issuer_and_audience() {
         mock_jwk_verifier!(Err(JWTVerifyError::InvalidSignature));
         let settings = Settings {
             oidc_issuer_url: None,
             ..oidc_settings()
         };
         assert!(Verifier::<MockJWTVerifier>::new(&settings, vec![]).is_err());
+        for oidc_audience in [None, Some(String::new())] {
+            let settings = Settings {
+                oidc_audience,
+                ..oidc_settings()
+            };
+            assert!(Verifier::<MockJWTVerifier>::new(&settings, vec![]).is_err());
+        }
+    }
+
+    #[tokio::test]
+    async fn test_oidc_checks_issuer_and_audience() -> Result<(), TokenserverError> {
+        let claims = |iss: serde_json::Value, aud: serde_json::Value| {
+            let mut claims = json!({
+                "sub": "keycloak_user_id",
+                "scope": format!("openid {SYNC_SCOPE}"),
+            });
+            if !iss.is_null() {
+                claims["iss"] = iss;
+            }
+            if !aud.is_null() {
+                claims["aud"] = aud;
+            }
+            claims
+        };
+
+        // `aud` can be a single audience or a list
+        verify_oidc_claims(claims(json!(OIDC_ISSUER), json!("tokenserver"))).await?;
+        verify_oidc_claims(claims(
+            json!(format!("{OIDC_ISSUER}/")),
+            json!(["account", "tokenserver"]),
+        ))
+        .await?;
+
+        for (iss, aud) in [
+            (
+                json!("http://127.0.0.1:1/realms/other"),
+                json!("tokenserver"),
+            ),
+            (json!(null), json!("tokenserver")),
+            (json!(OIDC_ISSUER), json!("account")),
+            (json!(OIDC_ISSUER), json!(["account", "broker"])),
+            (json!(OIDC_ISSUER), json!(null)),
+        ] {
+            let err = verify_oidc_claims(claims(iss, aud)).await.unwrap_err();
+            assert_eq!(err.status, "invalid-credentials");
+            assert_eq!(err.http_status, 401);
+            assert_eq!(err.description, "Unauthorized");
+        }
+        Ok(())
     }
 
     #[tokio::test]
@@ -699,6 +793,8 @@ mod tests {
             "scope": format!("openid {SYNC_SCOPE}"),
             "fxa-generation": 1234,
             "iat": 1_700_000_000,
+            "iss": OIDC_ISSUER,
+            "aud": "tokenserver",
         }))
         .await?;
         assert_eq!(res.fxa_uid, "keycloak_user_id");
@@ -710,6 +806,8 @@ mod tests {
             "scope": format!("openid {SYNC_SCOPE}"),
             "iat": 1_700_000_000,
             "generation": 1234,
+            "iss": OIDC_ISSUER,
+            "aud": "tokenserver",
         }))
         .await?;
         assert_eq!(res.generation, None);
@@ -724,7 +822,11 @@ mod tests {
             Some(format!("openid,{SYNC_SCOPE}")),
             None,
         ] {
-            let mut claims = json!({ "sub": "keycloak_user_id" });
+            let mut claims = json!({
+                "sub": "keycloak_user_id",
+                "iss": OIDC_ISSUER,
+                "aud": "tokenserver",
+            });
             if let Some(scope) = scope {
                 claims["scope"] = json!(scope);
             }

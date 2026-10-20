@@ -128,15 +128,6 @@ class FakeKeycloak(BaseAdapter):
             return self._response(request, 200, matching[first : first + size])
         if request.method == "GET" and route == "/events/config":
             return self._response(request, 200, self.events_config)
-        if request.method == "GET" and route == "/clients":
-            (client_id,) = query["clientId"]
-            # Like Keycloak, the search may also match other clients
-            found = [
-                {"id": f"uuid-{c}", "clientId": c}
-                for c in sorted(self.clients)
-                if c.startswith(client_id)
-            ]
-            return self._response(request, 200, found)
         if request.method == "GET" and route == "/users/count":
             return self._response(request, 200, len(self.users))
         match = re.fullmatch(r"/users/([^/]+)(/.*)?", route)
@@ -276,6 +267,11 @@ def revoke_offline(user):
     return [
         ("DELETE", f"{ADMIN}/users/{user}/consents/{c}") for c in THUNDERBIRD_CLIENTS
     ]
+
+
+def client_checks():
+    """The startup check of the offline clients, on the revoker's own user."""
+    return revoke_offline(SERVICE_ACCOUNT)
 
 
 # ── event → action mapping ───────────────────────────────────────────────────
@@ -553,7 +549,7 @@ def test_first_run_starts_from_now_minus_the_overlap(tmp_path):
     h.user_event("UPDATE_PASSWORD", "bob", offset_ms=-30_000)
     h.admin_event("DELETE", "users/dave", offset_ms=-1)
     assert h.revoker.poll_once() == 2
-    assert h.keycloak.calls() == revoke_all("bob")
+    assert h.keycloak.calls() == client_checks() + revoke_all("bob")
     assert h.db.retired == [f"dave@{EMAIL_DOMAIN}"]
     floor = NOW_MS - 60_000
     assert h.cursor()["floor"] == floor
@@ -580,7 +576,7 @@ def test_cursor_is_persisted_and_events_are_handled_once(tmp_path):
     h2.next_id = h.next_id
     h2.admin_event("ACTION", "users/bob/logout", offset_ms=2000)
     assert h2.revoker.poll_once() == 1
-    assert h2.keycloak.calls() == revoke_offline("bob")
+    assert h2.keycloak.calls() == client_checks() + revoke_offline("bob")
 
 
 def test_events_with_the_same_time_are_each_handled_once(tmp_path):
@@ -916,16 +912,26 @@ def test_max_failures_setting(tmp_path):
 # ── offline clients ──────────────────────────────────────────────────────────
 
 
-def test_offline_clients_are_resolved_before_the_first_poll(tmp_path):
+def test_offline_clients_are_checked_before_the_first_poll(tmp_path):
     h = Harness(tmp_path)
-    # The fake's search for "thunderbird" also returns "thunderbird-beta"
+    consents = set(h.keycloak.consents)
     h.revoker.poll_once()
-    lookups = [q for m, p, q in h.keycloak.requests if p == f"{ADMIN}/clients"]
-    assert lookups == [{"clientId": [c]} for c in THUNDERBIRD_CLIENTS]
+    # With the revoker's own user, which has nothing to revoke, rather than
+    # GET /clients, which needs view-clients (the fake has no such route)
+    assert h.keycloak.calls() == client_checks()
+    assert h.keycloak.consents == consents
     # Only once
     h.keycloak.requests.clear()
     h.revoker.poll_once()
-    assert not [p for m, p, q in h.keycloak.requests if p == f"{ADMIN}/clients"]
+    assert h.keycloak.calls() == []
+
+
+def test_offline_client_check_accepts_a_revoked_consent(tmp_path):
+    # Should the revoker's own user have a consent, Keycloak answers 204
+    h = Harness(tmp_path)
+    h.keycloak.consents.add((SERVICE_ACCOUNT, "thunderbird"))
+    h.revoker.poll_once()
+    assert h.keycloak.calls() == client_checks()
 
 
 @pytest.mark.parametrize("missing", ["thunderbird", "thunderbird-beta"])
@@ -935,15 +941,39 @@ def test_unknown_offline_client_fails_before_any_event(tmp_path, missing):
     h.user_event("UPDATE_PASSWORD", "alice", offset_ms=-1)
     with pytest.raises(RevokerError, match=f"offline client {missing} not found"):
         h.revoker.poll_once()
-    assert h.keycloak.calls() == []
+    # Nothing but the check, which stops at the missing client
+    checked = client_checks()[: THUNDERBIRD_CLIENTS.index(missing) + 1]
+    assert h.keycloak.calls() == checked
     assert not (tmp_path / "cursor.json").exists()
 
 
-def test_client_lookup_needs_a_list(tmp_path):
+@pytest.mark.parametrize(
+    "body",
+    [
+        None,
+        {"error": "User not found"},
+        {"error": "HTTP 404 Not Found"},
+        "<html>Not Found</html>",
+    ],
+    ids=["empty", "own-user-not-found", "other-error", "html"],
+)
+def test_offline_client_check_fails_on_other_404s(tmp_path, body):
+    # They say nothing about whether the client exists
     h = Harness(tmp_path)
-    h.keycloak.fail("GET", r"/clients$", 404, times=99, body=None)
-    with pytest.raises(RevokerError, match="without clients"):
+    h.keycloak.fail(
+        "DELETE", rf"/users/{SERVICE_ACCOUNT}/consents/", 404, times=99, body=body
+    )
+    with pytest.raises(RevokerError, match="checking offline client thunderbird"):
         h.revoker.poll_once()
+    assert not (tmp_path / "cursor.json").exists()
+
+
+def test_offline_client_check_fails_without_manage_users(tmp_path):
+    h = Harness(tmp_path)
+    h.keycloak.fail("DELETE", r"/consents/", 403, times=99)
+    with pytest.raises(RevokerError, match="HTTP 403"):
+        h.revoker.poll_once()
+    assert not (tmp_path / "cursor.json").exists()
 
 
 def test_consent_delete_of_a_missing_client_fails(tmp_path):

@@ -388,23 +388,30 @@ class Keycloak:
             )
         return config
 
-    def client_uuid(self, client_id: str) -> str:
-        """Return the internal ID of a client, raising RevokerError if there is none."""
-        res = self.admin("GET", "/clients", params={"clientId": client_id})
-        try:
-            clients = res.json() if res.status_code == 200 else None
-        except ValueError:
-            clients = None
-        if not isinstance(clients, list):
-            raise RevokerError(f"GET /clients: HTTP {res.status_code} without clients")
-        for client in clients:
-            if isinstance(client, dict) and client.get("clientId") == client_id:
-                return str(client["id"])
-        # Without view-clients Keycloak answers with an empty list as well
-        raise RevokerError(
-            f"offline client {client_id} not found in the realm (or the revoker's "
-            "service account lacks view-clients)"
-        )
+    def check_offline_client(self, client_id: str) -> None:
+        """Raise RevokerError unless the realm has the client.
+
+        Revokes the client's offline sessions of the revoker's own
+        service-account user, which never has any, so nothing changes. Unlike
+        GET /clients, which needs view-clients, this needs no role beyond
+        manage-users: Keycloak answers 404 "Client not found" for a missing
+        client, and 204 or 404 "Consent nor offline token not found" for one
+        that exists.
+        """
+        own = quote(self.own_user_id(), safe="")
+        res = self.admin("DELETE", f"/users/{own}/consents/{quote(client_id, safe='')}")
+        if res.status_code != 404:
+            return
+        error = keycloak_error(res)
+        if error == CLIENT_NOT_FOUND:
+            raise RevokerError(f"offline client {client_id} not found in the realm")
+        # Any other 404, such as "User not found" for the revoker's own user,
+        # says nothing about the client
+        if error != CONSENT_NOT_FOUND:
+            raise RevokerError(
+                f"checking offline client {client_id}: DELETE "
+                "/users/{id}/consents/{client}: unexpected HTTP 404"
+            )
 
     def logout(self, user_id: str) -> None:
         """Sign the user out of all their (online) sessions."""
@@ -584,7 +591,8 @@ class Revoker:
         The realm must store user events of the types the revoker acts on, and
         admin events: otherwise every poll finds nothing, for ever. Every
         offline client must exist: DELETE users/<id>/consents/<client> of a
-        missing one revokes nothing.
+        missing one revokes nothing. Each is checked with that same DELETE for
+        the revoker's own service-account user, which has nothing to revoke.
         """
         events = self.keycloak.events_config()
         if events.get("eventsEnabled") is not True:
@@ -608,7 +616,7 @@ class Revoker:
         else:
             self._events_expiration_ms = None
         for client_id in self.config.offline_clients:
-            self.keycloak.client_uuid(client_id)
+            self.keycloak.check_offline_client(client_id)
         self._checked = True
 
     def poll_once(self) -> int:

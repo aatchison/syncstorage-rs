@@ -31,9 +31,16 @@ signed out everywhere, including the browser they just made the change in. A
 password change emits both `UPDATE_PASSWORD` and `UPDATE_CREDENTIAL`; handling
 it twice is harmless.
 
-Before the first poll the revoker looks up every client in
-`REVOKER_OFFLINE_CLIENTS` (`GET /clients?clientId=`) and exits if one isn't in
-the realm: revoking the consent of a client that doesn't exist revokes nothing.
+Before the first poll the revoker checks every client in
+`REVOKER_OFFLINE_CLIENTS` and exits if one isn't in the realm: revoking the
+consent of a client that doesn't exist revokes nothing. The check is the same
+`DELETE users/{id}/consents/{client}`, for the revoker's own service-account
+user, which never has a consent or offline session: Keycloak answers
+`404 {"error":"Client not found"}` for a missing client and `204` or
+`404 {"error":"Consent nor offline token not found"}` for one that exists, so
+nothing changes and no role beyond `manage-users` is needed. Any other answer
+stops the revoker too.
+
 Keycloak's own 404s for a user who no longer exists (`User not found`) or has no
 consent or offline session for the client (`Consent nor offline token not
 found`) count as done; any other 404, including `Client not found`, fails the
@@ -140,15 +147,15 @@ The realm must store events:
 
 The revoker authenticates as the service account of a confidential client with
 only the client-credentials grant, whose service account has the
-`realm-management` roles `view-events`, `view-users`, `manage-users` and
-`view-clients`. `view-clients` is for the startup lookup of the offline clients:
-with `query-clients` alone Keycloak 26.2 answers that lookup with an empty list.
-It also lets the account read every client's configuration, secrets included.
-The service account needs no realm roles, not even the default ones.
+`realm-management` roles `view-events`, `view-users` and `manage-users`, and no
+others. In particular it needs no `view-clients`, which would let it read every
+client's configuration, secrets included: the startup check of the offline
+clients goes through the consent endpoint (see above). The service account
+needs no realm roles, not even the default ones.
 
 Keycloak's admin API checks the roles in the service account's token. Set
 `fullScopeAllowed: false` on the client, which keeps every other role out of
-those tokens, and give it these four roles as its scope: in the admin console,
+those tokens, and give it these three roles as its scope: in the admin console,
 the client's "Client scopes" tab, its dedicated scope, "Scope"; in a realm
 export, `clientScopeMappings`. Without them every admin call gets 403.
 
@@ -266,9 +273,8 @@ live tests run the revoker with an account with only these grants.
 ### The client secret
 
 `manage-users` lets the client's service account reset any user's password,
-change their email and delete them, and `view-clients` lets it read every
-client's secret: together close to realm-admin power. Treat the client secret
-like an admin credential. Keep it in a file readable by the service user only
+change their email and delete them. Treat the client secret like an admin
+credential. Keep it in a file readable by the service user only
 (`REVOKER_CLIENT_SECRET_FILE`, or systemd's `LoadCredential` as above), never
 in the environment of other processes or in logs, and rotate it like other
 admin credentials: regenerate it in Keycloak (the client's "Credentials" tab),

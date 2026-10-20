@@ -507,8 +507,7 @@
         "realm-management": [
           "view-events",
           "view-users",
-          "manage-users",
-          "view-clients"
+          "manage-users"
         ]
       },
       "notBefore": 0,
@@ -530,8 +529,7 @@
         "roles": [
           "view-events",
           "view-users",
-          "manage-users",
-          "view-clients"
+          "manage-users"
         ]
       }
     ],

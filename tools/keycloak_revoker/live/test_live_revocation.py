@@ -20,6 +20,7 @@ from .helpers import (
     Secret,
     admin_events_on,
     change_password_as_user,
+    client_uuid,
     create_user,
     exchange,
     introspect,
@@ -207,11 +208,28 @@ def test_reconcile_retires_user_deleted_while_revoker_was_down(
 
 
 def test_unknown_offline_client_stops_the_revoker(admin, revoker_env, tmp_path):
-    """A typo in REVOKER_OFFLINE_CLIENTS fails at startup, before any event."""
+    """A typo in REVOKER_OFFLINE_CLIENTS fails at startup, before any event.
+
+    The revoker's service account has no view-clients, so the check can't
+    depend on reading clients.
+    """
+    revoker = client_uuid(admin, revoker_env["REVOKER_CLIENT_ID"])
+    res = admin("GET", f"/clients/{revoker}/service-account-user")
+    assert res.status_code == 200, why(res)
+    account = res.json()["id"]
+    realm_management = client_uuid(admin, "realm-management")
+    res = admin(
+        "GET",
+        f"/users/{account}/role-mappings/clients/{realm_management}/composite",
+    )
+    assert res.status_code == 200, why(res)
+    assert "view-clients" not in {role["name"] for role in res.json()}
+
     env = revoker_env.but(
         REVOKER_CURSOR_FILE=str(tmp_path / "cursor"),
         REVOKER_OFFLINE_CLIENTS="revoker-live-thunderbird,revoker-live-typo",
     )
     output = run_revoker(env, "--once", status=1)
     assert "offline client revoker-live-typo not found in the realm" in output
+    assert "revoker-live-thunderbird not found" not in output
     assert not (tmp_path / "cursor").exists()

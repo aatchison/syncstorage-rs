@@ -103,5 +103,8 @@ other's (idempotent) work, but there is no locking.
 
 ## Tests
 
-Unit tests, against a fake Keycloak and a fake Tokenserver database, are in
-`tests/`: `poetry run pytest tests`, from this directory.
+- `tests/`: unit tests, against a fake Keycloak and a fake Tokenserver database:
+  `poetry run pytest tests`, from this directory
+- `live/`: tests against a real Keycloak, Tokenserver and database, for each way
+  of cutting a user off with an online and an offline session. Run by
+  `keycloak/run-suite.sh`, which provides their settings

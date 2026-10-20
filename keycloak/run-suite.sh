@@ -12,6 +12,9 @@
 #   (d) tools/integration_tests (with tokenserver/) against syncserver in OIDC mode
 #   (e) tools/tokenserver (the tokenserver utility scripts' own tests), against the
 #       tokenserver database
+#   (f) tools/keycloak_revoker's unit tests
+#   (g) tools/keycloak_revoker/live: revocation against the real Keycloak, revoker
+#       and a syncserver (OIDC mode) that accepts the tests' Thunderbird client
 # (c) runs before (d) because test_storage.py leaves collections behind that break
 # syncstorage-mysql's static_collection_id test. Exits non-zero if any step fails.
 # Secrets are read from the files start-services.sh wrote and masked in all output.
@@ -107,6 +110,44 @@ integration_tests() {
     return "$rc"
 }
 
+revoker_poetry_install() {
+    /tmp/poetry/bin/poetry -C tools/keycloak_revoker install --no-interaction --no-root --without dev
+}
+
+revoker_unit_tests() {
+    /tmp/poetry/bin/poetry -C tools/keycloak_revoker run \
+        pytest "$REPO/tools/keycloak_revoker/tests" -p no:cacheprovider -rs
+}
+
+# Its own syncserver, accepting only the client the live tests sign in with
+# (LIVE_CLIENT_ID in tools/keycloak_revoker/live/helpers.py)
+revocation_tests() {
+    local pid rc=0
+    SYNC_TOKENSERVER__OIDC_ALLOWED_CLIENTS=revoker-live-thunderbird \
+        "${CARGO_TARGET_DIR:-$REPO/target}/debug/syncserver" >"$LOG_DIR/syncserver-revocation.log" 2>&1 &
+    pid=$!
+    for _ in $(seq 120); do
+        curl -fsS http://localhost:8000/__heartbeat__ >/dev/null 2>&1 && break
+        kill -0 "$pid" 2>/dev/null || break
+        sleep 1
+    done
+    if curl -fsS http://localhost:8000/__heartbeat__; then
+        echo
+        PYTHONPATH="$REPO" /tmp/poetry/bin/poetry -C tools/keycloak_revoker run \
+            pytest "$REPO/tools/keycloak_revoker/live" -p no:cacheprovider -rs -v || rc=$?
+    else
+        echo "syncserver didn't become healthy"
+        rc=1
+    fi
+    kill "$pid" 2>/dev/null
+    wait "$pid" 2>/dev/null
+    if [ "$rc" -ne 0 ]; then
+        echo "--- last lines of syncserver log:"
+        tail -n 50 "$LOG_DIR/syncserver-revocation.log"
+    fi
+    return "$rc"
+}
+
 main() {
     cd "$REPO" || return 1
     echo "rustc: $(rustc --version)"
@@ -158,6 +199,9 @@ main() {
     step "(d) integration tests" integration_tests
     step "(e) tokenserver poetry install" tokenserver_poetry_install
     step "(e) tokenserver tests" tokenserver_tests
+    step "(f) revoker poetry install" revoker_poetry_install
+    step "(f) revoker unit tests" revoker_unit_tests
+    step "(g) revocation tests" revocation_tests
 
     echo "=== summary"
     printf '%s\n' "${summary[@]}"

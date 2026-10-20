@@ -1,0 +1,95 @@
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this file,
+# You can obtain one at http://mozilla.org/MPL/2.0/.
+"""Fixtures for the live revocation tests (run by keycloak/run-suite.sh).
+
+They need a running Keycloak with keycloak/realm-export.json, its master admin,
+the revoker's client secret, and a Tokenserver in OIDC mode that accepts tokens
+from LIVE_CLIENT_ID. Settings, all required:
+
+  SYNC_TOKENSERVER__OIDC_ISSUER_URL   e.g. http://localhost:7080/realms/sync
+  KEYCLOAK_ADMIN_USERNAME, KEYCLOAK_ADMIN_PASSWORD
+  REVOKER_CLIENT_ID, REVOKER_CLIENT_SECRET_FILE
+  TOKENSERVER_HOST                    e.g. http://localhost:8000
+  SYNC_TOKENSERVER__DATABASE_URL, SYNC_TOKENSERVER__FXA_EMAIL_DOMAIN
+"""
+
+import os
+
+import pytest
+
+from .helpers import (
+    DEFAULT_OAUTH_SCOPE,
+    LIVE_CLIENT_ID,
+    NODE_URL,
+    Database,
+    KeycloakAdmin,
+    run_revoker,
+)
+
+
+@pytest.fixture(scope="session")
+def admin():
+    """Return a KeycloakAdmin, after adding the Thunderbird stand-in client."""
+    admin = KeycloakAdmin()
+    res = admin(
+        "POST",
+        "/clients",
+        json={
+            "clientId": LIVE_CLIENT_ID,
+            "protocol": "openid-connect",
+            "publicClient": True,
+            "standardFlowEnabled": False,
+            "directAccessGrantsEnabled": True,
+            "fullScopeAllowed": False,
+            # Tokenserver accepts only RFC 9068 access tokens
+            "attributes": {"access.token.header.type.rfc9068": "true"},
+            "defaultClientScopes": ["basic"],
+            "optionalClientScopes": [DEFAULT_OAUTH_SCOPE, "offline_access"],
+        },
+    )
+    if res.status_code != 409:
+        res.raise_for_status()
+    return admin
+
+
+@pytest.fixture(scope="session")
+def db():
+    """Return tools/tokenserver's Database, with the sync service and a node."""
+    database = Database()
+    try:
+        database._get_service_id("sync-1.5")
+    except Exception:
+        database.add_service("sync-1.5", r"{node}/1.5/{uid}")
+    try:
+        database.get_node_id(NODE_URL)
+    except ValueError:
+        database.add_node(NODE_URL, 1000, available=1000)
+    yield database
+    database.close()
+
+
+@pytest.fixture(scope="session")
+def revoker_env(tmp_path_factory):
+    """Return the environment the revoker runs with, its cursor in a temp dir."""
+    issuer = os.environ["SYNC_TOKENSERVER__OIDC_ISSUER_URL"].rstrip("/")
+    base, realm = issuer.rsplit("/realms/", 1)
+    env = dict(os.environ)
+    env.update(
+        {
+            "REVOKER_KEYCLOAK_URL": base,
+            "REVOKER_REALM": realm,
+            "REVOKER_OFFLINE_CLIENTS": LIVE_CLIENT_ID,
+            "REVOKER_CURSOR_FILE": str(tmp_path_factory.mktemp("revoker") / "cursor"),
+            "REVOKER_LOG_LEVEL": "DEBUG",
+        }
+    )
+    return env
+
+
+@pytest.fixture(scope="session")
+def revoker(revoker_env, admin, db):
+    """Return a function that runs the revoker, after starting its cursor."""
+    # The first run starts the cursor at the current time
+    run_revoker(revoker_env, "--once")
+    return lambda *args: run_revoker(revoker_env, *args)

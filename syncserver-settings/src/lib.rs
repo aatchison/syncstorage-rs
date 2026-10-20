@@ -273,6 +273,35 @@ impl Settings {
                         .to_owned(),
                 ));
             }
+            // The FxA webhook would act on OIDC users, and the FxA JWKs would replace the
+            // provider's keys.
+            if self.tokenserver.fxa_webhook_enabled {
+                return Err(ConfigError::Message(
+                    "SYNC_TOKENSERVER__FXA_WEBHOOK_ENABLED must not be set when \
+                     SYNC_TOKENSERVER__OAUTH_PROVIDER is \"oidc\""
+                        .to_owned(),
+                ));
+            }
+            if self.tokenserver.fxa_oauth_primary_jwk.is_some()
+                || self.tokenserver.fxa_oauth_secondary_jwk.is_some()
+            {
+                return Err(ConfigError::Message(
+                    "SYNC_TOKENSERVER__FXA_OAUTH_PRIMARY_JWK and \
+                     SYNC_TOKENSERVER__FXA_OAUTH_SECONDARY_JWK must not be set when \
+                     SYNC_TOKENSERVER__OAUTH_PROVIDER is \"oidc\""
+                        .to_owned(),
+                ));
+            }
+        } else if self.tokenserver.enabled
+            && (self.tokenserver.oidc_issuer_url.is_some()
+                || self.tokenserver.oidc_audience.is_some())
+        {
+            // Otherwise a missing oauth_provider would silently verify tokens against FxA.
+            return Err(ConfigError::Message(
+                "SYNC_TOKENSERVER__OIDC_ISSUER_URL and SYNC_TOKENSERVER__OIDC_AUDIENCE \
+                 require SYNC_TOKENSERVER__OAUTH_PROVIDER to be \"oidc\""
+                    .to_owned(),
+            ));
         }
         Ok(())
     }
@@ -761,6 +790,118 @@ mod test {
                     .expect_err("an unknown oauth_provider should not fall back to FxA");
             },
         );
+    }
+
+    /// Env for an enabled Tokenserver with the given OIDC settings and no FxA webhook or JWKs,
+    /// plus `extra`
+    fn oidc_vars(
+        provider: Option<&'static str>,
+        issuer: Option<&'static str>,
+        audience: Option<&'static str>,
+        extra: &[(&'static str, Option<&'static str>)],
+    ) -> Vec<(&'static str, Option<&'static str>)> {
+        let mut vars = vec![
+            (
+                "SYNC_SYNCSTORAGE__DATABASE_URL",
+                Some(TEST_SYNCSTORAGE_DATABASE_URL),
+            ),
+            (
+                "SYNC_TOKENSERVER__DATABASE_URL",
+                Some(TEST_TOKENSERVER_DATABASE_URL),
+            ),
+            ("SYNC_TOKENSERVER__ENABLED", Some("true")),
+            ("SYNC_TOKENSERVER__OAUTH_PROVIDER", provider),
+            ("SYNC_TOKENSERVER__OIDC_ISSUER_URL", issuer),
+            ("SYNC_TOKENSERVER__OIDC_AUDIENCE", audience),
+            ("SYNC_TOKENSERVER__FXA_WEBHOOK_ENABLED", None),
+            ("SYNC_TOKENSERVER__FXA_OAUTH_PRIMARY_JWK__KTY", None),
+            ("SYNC_TOKENSERVER__FXA_OAUTH_PRIMARY_JWK__N", None),
+            ("SYNC_TOKENSERVER__FXA_OAUTH_PRIMARY_JWK__E", None),
+            ("SYNC_TOKENSERVER__FXA_OAUTH_SECONDARY_JWK__KTY", None),
+            ("SYNC_TOKENSERVER__FXA_OAUTH_SECONDARY_JWK__N", None),
+            ("SYNC_TOKENSERVER__FXA_OAUTH_SECONDARY_JWK__E", None),
+        ];
+        vars.extend_from_slice(extra);
+        vars
+    }
+
+    const OIDC_TEST_ISSUER: &str = "http://keycloak:7080/realms/sync";
+
+    #[test]
+    fn test_oidc_provider_rejects_fxa_webhook() {
+        temp_env::with_vars(
+            oidc_vars(
+                Some("oidc"),
+                Some(OIDC_TEST_ISSUER),
+                Some("tokenserver"),
+                &[("SYNC_TOKENSERVER__FXA_WEBHOOK_ENABLED", Some("true"))],
+            ),
+            || {
+                let err = Settings::with_env_and_config_file(None)
+                    .expect_err("an OIDC provider with the FxA webhook should fail validation");
+                assert!(
+                    err.to_string()
+                        .contains("SYNC_TOKENSERVER__FXA_WEBHOOK_ENABLED")
+                );
+            },
+        );
+    }
+
+    #[test]
+    fn test_oidc_provider_rejects_fxa_jwks() {
+        for [kty, n, e] in [
+            [
+                "SYNC_TOKENSERVER__FXA_OAUTH_PRIMARY_JWK__KTY",
+                "SYNC_TOKENSERVER__FXA_OAUTH_PRIMARY_JWK__N",
+                "SYNC_TOKENSERVER__FXA_OAUTH_PRIMARY_JWK__E",
+            ],
+            [
+                "SYNC_TOKENSERVER__FXA_OAUTH_SECONDARY_JWK__KTY",
+                "SYNC_TOKENSERVER__FXA_OAUTH_SECONDARY_JWK__N",
+                "SYNC_TOKENSERVER__FXA_OAUTH_SECONDARY_JWK__E",
+            ],
+        ] {
+            temp_env::with_vars(
+                oidc_vars(
+                    Some("oidc"),
+                    Some(OIDC_TEST_ISSUER),
+                    Some("tokenserver"),
+                    &[(kty, Some("RSA")), (n, Some("AQAB")), (e, Some("AQAB"))],
+                ),
+                || {
+                    let err = Settings::with_env_and_config_file(None)
+                        .expect_err("an OIDC provider with an FxA JWK should fail validation");
+                    assert!(
+                        err.to_string()
+                            .contains("SYNC_TOKENSERVER__FXA_OAUTH_PRIMARY_JWK")
+                    );
+                },
+            );
+        }
+    }
+
+    #[test]
+    fn test_oidc_settings_require_oidc_provider() {
+        for (provider, issuer, audience) in [
+            (None, Some(OIDC_TEST_ISSUER), None),
+            (Some("fxa"), None, Some("tokenserver")),
+            (Some("fxa"), Some(OIDC_TEST_ISSUER), Some("tokenserver")),
+        ] {
+            temp_env::with_vars(oidc_vars(provider, issuer, audience, &[]), || {
+                let err = Settings::with_env_and_config_file(None)
+                    .expect_err("OIDC settings without the OIDC provider should fail validation");
+                assert!(
+                    err.to_string()
+                        .contains("require SYNC_TOKENSERVER__OAUTH_PROVIDER")
+                );
+            });
+        }
+        // FxA mode without OIDC settings is unaffected
+        temp_env::with_vars(oidc_vars(None, None, None, &[]), || {
+            let settings = Settings::with_env_and_config_file(None)
+                .expect("FxA mode without OIDC settings should validate");
+            assert_eq!(settings.tokenserver.oauth_provider, OAuthProvider::Fxa);
+        });
     }
 
     #[test]

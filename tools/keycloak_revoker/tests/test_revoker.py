@@ -1035,7 +1035,7 @@ def test_reconcile_retires_users_gone_from_keycloak(tmp_path):
         ]
     )
     h = Harness(tmp_path, db=db)
-    # 2 of 3 is over the cap; test_reconcile_cap covers that
+    # 2 of 3 is over the cap (1); test_reconcile_cap covers that
     assert h.revoker.reconcile(force=True) == 2
     assert db.retired == [f"dave@{EMAIL_DOMAIN}", f"erin@{EMAIL_DOMAIN}"]
     looked_up = [p for m, p, _ in h.keycloak.requests if "/users/" in p]
@@ -1160,9 +1160,15 @@ def test_reconcile_refuses_when_the_count_is_not_an_int(tmp_path, status, body):
     [
         (200, 10, False),  # REVOKER_RECONCILE_MAX, 5 %
         (200, 11, True),  # more than REVOKER_RECONCILE_MAX
+        (200, 15, True),  # more than REVOKER_RECONCILE_MAX, under 10 %
         (20, 2, False),  # 10 %
         (20, 3, True),  # more than 10 %
-        (5, 1, True),
+        (29, 2, False),  # 10 %, rounded down
+        (29, 3, True),
+        (5, 1, False),  # at least 1
+        (3, 1, False),  # at least 1
+        (3, 2, True),  # more than 1
+        (1, 1, False),  # at least 1
     ],
 )
 def test_reconcile_cap(tmp_path, count, gone, refused):

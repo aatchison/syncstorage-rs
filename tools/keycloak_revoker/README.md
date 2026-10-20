@@ -101,9 +101,11 @@ look wrong:
 - a user counts as gone only on Keycloak's own `404 {"error":"User not found"}`;
   any other answer, such as a 404 from a proxy that hides `/admin/`, stops the run
 - it retires at most `REVOKER_RECONCILE_MAX` users, and at most 10 % of the
-  active Tokenserver users of `FXA_EMAIL_DOMAIN`, in one run. If more are gone it
-  retires none and fails; once you have checked that Keycloak really lost them,
-  run `--reconcile --force`
+  active Tokenserver users of `FXA_EMAIL_DOMAIN` (rounded down, but at least 1),
+  in one run: `min(REVOKER_RECONCILE_MAX, max(1, active // 10))`. So with 3
+  active users it retires 1, with 25 it retires 2, and with 200 it retires
+  `REVOKER_RECONCILE_MAX` (10). If more are gone it retires none and fails; once
+  you have checked that Keycloak really lost them, run `--reconcile --force`
 
 ## Settings
 
@@ -123,7 +125,7 @@ All from environment variables.
 | `REVOKER_TIMEOUT` | 10 | HTTP timeout in seconds |
 | `REVOKER_ATTEMPTS` | 4 | Attempts per Keycloak request on a 5xx or network error |
 | `REVOKER_MAX_FAILURES` | 5 | When polling forever, exit after this many failed polls in a row |
-| `REVOKER_RECONCILE_MAX` | 10 | The most users one `--reconcile` retires without `--force` |
+| `REVOKER_RECONCILE_MAX` | 10 | The most users one `--reconcile` retires without `--force`, whatever 10 % of the active users is (see "Reconcile") |
 | `REVOKER_LOG_LEVEL` | `INFO` | |
 | `SYNC_TOKENSERVER__DATABASE_URL` | (required) | The Tokenserver database, as for Tokenserver |
 | `SYNC_TOKENSERVER__FXA_EMAIL_DOMAIN` | (required) | The same value as Tokenserver's |

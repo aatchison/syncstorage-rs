@@ -84,8 +84,9 @@ CONSENT_NOT_FOUND = "Consent nor offline token not found"
 CLIENT_NOT_FOUND = "Client not found"
 # The cursor never moves past the revoker's own clock minus this
 CLOCK_MARGIN_MS = 1000
-# --reconcile retires at most this share of the active users without --force
-RECONCILE_MAX_SHARE = 0.1
+# --reconcile retires at most this percentage of the active users without
+# --force, but at least 1
+RECONCILE_MAX_PERCENT = 10
 
 _ACTIVE_EMAILS = sqltext("""\
 select distinct
@@ -689,7 +690,7 @@ class Revoker:
         Retirement can't be undone, so nothing is retired unless Keycloak
         answers as expected for a user that certainly exists, and, without
         `force`, not more than REVOKER_RECONCILE_MAX users or 10 % of the
-        active ones.
+        active ones (rounded down, but at least 1).
         """
         # A Keycloak with no users at all is far more likely to be the wrong one
         # (or a broken one) than a realm whose every user was deleted
@@ -728,16 +729,18 @@ class Revoker:
         gone = [
             user_id for user_id in user_ids if not self.keycloak.user_exists(user_id)
         ]
-        too_many = (
-            len(gone) > self.config.reconcile_max
-            or len(gone) > len(user_ids) * RECONCILE_MAX_SHARE
+        # At least 1, or with fewer than 10 active users a single missed
+        # deletion would need --force
+        allowed = min(
+            self.config.reconcile_max,
+            max(1, len(user_ids) * RECONCILE_MAX_PERCENT // 100),
         )
-        if too_many and not force:
+        if len(gone) > allowed and not force:
             raise RevokerError(
                 f"reconcile would retire {len(gone)} of {len(user_ids)} active "
-                f"users, more than REVOKER_RECONCILE_MAX "
-                f"({self.config.reconcile_max}) or 10 %; retired none. If "
-                "Keycloak really lost these users, rerun with --force"
+                f"users, more than {allowed}: REVOKER_RECONCILE_MAX "
+                f"({self.config.reconcile_max}) or 10 % (at least 1); retired "
+                "none. If Keycloak really lost these users, rerun with --force"
             )
         for user_id in gone:
             self.retire(user_id)

@@ -200,9 +200,10 @@ def test_reconcile_retires_user_deleted_while_revoker_was_down(
     assert_active_record(db, user_id)
     assert exchange(access_token).status_code == 200
 
-    # --force: the cap on how many users one run retires counts every active
-    # Tokenserver user, and this database holds few, so one deletion is over 10 %
-    output = run_revoker(env, "--reconcile", "--force")
+    # No --force: however few active users this database holds, the cap lets
+    # one run retire 1 (and, with fewer than 20, no more, so a second user
+    # wrongly counted as gone fails the run)
+    output = run_revoker(env, "--reconcile")
     assert f"reconcile: retired keycloak user {user_id}" in output
     assert_retired(db, user_id, access_token)
 

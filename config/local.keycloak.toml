@@ -35,6 +35,8 @@ tokenserver.enabled = true
 tokenserver.database_url = "mysql://test:test@localhost:3306/tokenserver"
 tokenserver.node_type = "mysql"
 tokenserver.run_migrations = true
+# Storage node assigned to users; this server's own syncstorage.
+tokenserver.init_node_url = "http://localhost:8000"
 
 # Users' emails are built as "<keycloak subject>@<fxa_email_domain>".
 tokenserver.fxa_email_domain = "localhost"

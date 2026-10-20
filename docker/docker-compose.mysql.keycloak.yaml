@@ -27,7 +27,7 @@ services:
     volumes:
       - ../keycloak:/opt/keycloak/data/import:ro
     ports:
-      - "7080:7080"
+      - "127.0.0.1:7080:7080"
 
   syncserver:
     image: syncstorage-rs:keycloak
@@ -46,4 +46,5 @@ services:
       SYNC_TOKENSERVER__OAUTH_PROVIDER: oidc
       SYNC_TOKENSERVER__OIDC_ISSUER_URL: http://keycloak:7080/realms/sync
       SYNC_TOKENSERVER__OIDC_AUDIENCE: tokenserver
+      SYNC_TOKENSERVER__INIT_NODE_URL: http://localhost:8000
       RUST_BACKTRACE: 1

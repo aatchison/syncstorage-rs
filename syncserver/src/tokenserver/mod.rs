@@ -16,7 +16,7 @@ use tokenserver_auth::JWTVerifierImpl;
 use tokenserver_auth::{SETVerifierImpl, VerifyToken, oauth};
 use tokenserver_common::NodeType;
 use tokenserver_db::{DbPool, pool_from_settings};
-use tokenserver_settings::Settings;
+use tokenserver_settings::{OAuthProvider, Settings};
 
 use crate::{error::ApiError, server::user_agent};
 
@@ -36,6 +36,7 @@ pub struct ServerState {
     pub fxa_webhook_enabled: bool,
     pub fxa_webhook_metrics_only: bool,
     pub allow_new_users: bool,
+    pub oauth_provider: OAuthProvider,
 }
 
 impl ServerState {
@@ -114,6 +115,7 @@ impl ServerState {
             fxa_webhook_enabled: settings.fxa_webhook_enabled,
             fxa_webhook_metrics_only: settings.fxa_webhook_metrics_only,
             allow_new_users: settings.allow_new_users,
+            oauth_provider: settings.oauth_provider,
         })
     }
 

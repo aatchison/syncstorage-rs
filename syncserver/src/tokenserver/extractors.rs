@@ -25,7 +25,8 @@ use syncserver_common::Taggable;
 use syncserver_settings::Secrets;
 use tokenserver_auth::{FxaWebhookClaims, JWTVerifyError};
 use tokenserver_common::{ErrorLocation, NodeType, TokenserverError};
-use tokenserver_db::{Db, DbPool, SYNC_SERVICE_NAME, params, results};
+use tokenserver_db::{Db, DbPool, MAX_GENERATION, SYNC_SERVICE_NAME, params, results};
+use tokenserver_settings::OAuthProvider;
 
 use super::{LogItemsMutator, ServerState, TokenserverMetrics};
 use crate::server::MetricsWrapper;
@@ -175,6 +176,27 @@ impl TokenserverRequest {
         }
         Ok(())
     }
+
+    /// Refuses a retired user (generation `MAX_GENERATION`) in OIDC mode when the
+    /// token carries no generation.
+    ///
+    /// Retiring a user marks it with `MAX_GENERATION` so that `validate` rejects
+    /// older generations. OIDC access tokens normally carry no generation, so
+    /// that check can't fire and a deleted user's unexpired token would still be
+    /// exchanged. A token that does carry a generation is left to `validate`, as
+    /// is FxA mode, so their behaviour is unchanged.
+    fn validate_not_retired(&self, oauth_provider: OAuthProvider) -> Result<(), TokenserverError> {
+        if oauth_provider == OAuthProvider::Oidc
+            && self.auth_data.generation.is_none()
+            && self.user.generation == MAX_GENERATION
+        {
+            return Err(TokenserverError {
+                context: "User has been retired".to_owned(),
+                ..TokenserverError::invalid_generation()
+            });
+        }
+        Ok(())
+    }
 }
 
 impl FromRequest for TokenserverRequest {
@@ -290,6 +312,7 @@ impl FromRequest for TokenserverRequest {
             };
 
             tokenserver_request.validate()?;
+            tokenserver_request.validate_not_retired(state.oauth_provider)?;
 
             Ok(tokenserver_request)
         })
@@ -1158,6 +1181,87 @@ mod tests {
         );
     }
 
+    #[test]
+    fn test_retired_user_in_oidc_mode() {
+        // A retired user (as tools/tokenserver's retire_user leaves it) presenting a
+        // token with the given generation
+        let request = |generation: Option<i64>| TokenserverRequest {
+            user: results::GetOrCreateUser {
+                uid: 1,
+                email: "test@test.com".to_owned(),
+                client_state: "aaaa".to_owned(),
+                generation: MAX_GENERATION,
+                node: "node".to_owned(),
+                keys_changed_at: Some(1234),
+                replaced_at: Some(1234),
+                created_at: 1234,
+                first_seen_at: 1234,
+                old_client_states: vec![],
+            },
+            auth_data: AuthData {
+                fxa_uid: "test".to_owned(),
+                email: "test@test.com".to_owned(),
+                generation,
+                keys_changed_at: Some(1234),
+                client_state: "aaaa".to_owned(),
+            },
+            shared_secret: "secret".to_owned(),
+            hashed_fxa_uid: "abcdef".to_owned(),
+            hashed_device_id: "abcdef".to_owned(),
+            service_id: 1,
+            duration: TOKEN_DURATION,
+            node_type: NodeType::default(),
+        };
+
+        // OIDC token without a generation: validate can't see the retirement, so
+        // validate_not_retired refuses it
+        let tokenserver_request = request(None);
+        assert_eq!(tokenserver_request.validate(), Ok(()));
+        let error = tokenserver_request
+            .validate_not_retired(OAuthProvider::Oidc)
+            .unwrap_err();
+        assert_eq!(
+            error,
+            TokenserverError {
+                context: "User has been retired".to_owned(),
+                ..TokenserverError::invalid_generation()
+            }
+        );
+        assert_eq!(error.http_status.as_u16(), 401);
+
+        // FxA mode is unchanged: the check never applies
+        assert_eq!(
+            tokenserver_request.validate_not_retired(OAuthProvider::Fxa),
+            Ok(())
+        );
+        // A token with a generation is left to validate, as upstream: an older
+        // generation is refused there, MAX_GENERATION is accepted
+        assert_eq!(
+            request(Some(MAX_GENERATION)).validate_not_retired(OAuthProvider::Oidc),
+            Ok(())
+        );
+        assert_eq!(
+            request(Some(1235)).validate_not_retired(OAuthProvider::Oidc),
+            Ok(())
+        );
+        assert_eq!(
+            request(Some(1235)).validate().unwrap_err(),
+            TokenserverError {
+                context: "New generation less than previously-seen generation".to_owned(),
+                ..TokenserverError::invalid_generation()
+            }
+        );
+
+        // A user that isn't retired is unaffected
+        let mut tokenserver_request = request(None);
+        tokenserver_request.user.generation = 0;
+        tokenserver_request.user.replaced_at = None;
+        assert_eq!(
+            tokenserver_request.validate_not_retired(OAuthProvider::Oidc),
+            Ok(())
+        );
+    }
+
     #[actix_rt::test]
     async fn test_keys_changed_without_generation_change() {
         // The request includes a new value for keys_changed_at without a new value for generation
@@ -1348,6 +1452,7 @@ mod tests {
             fxa_webhook_enabled: false,
             fxa_webhook_metrics_only: false,
             allow_new_users: true,
+            oauth_provider: Default::default(),
         }
     }
 
@@ -1372,6 +1477,7 @@ mod tests {
             fxa_webhook_enabled: true,
             fxa_webhook_metrics_only: false,
             allow_new_users: true,
+            oauth_provider: Default::default(),
         }
     }
 

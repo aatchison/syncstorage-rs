@@ -464,6 +464,7 @@ mod tests {
             fxa_webhook_enabled: true,
             fxa_webhook_metrics_only: false,
             allow_new_users: true,
+            oauth_provider: Default::default(),
         }
     }
 

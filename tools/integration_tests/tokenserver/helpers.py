@@ -125,8 +125,8 @@ def _setup_keycloak_realm() -> None:
     The test client is a public client with direct password grants, whose access
     tokens are RFC 9068 tokens (typ at+jwt) carrying the user's generation
     attribute as the fxa-generation claim. The oldsync scope (whose audience
-    mapper adds Tokenserver's audience) and a bad scope are optional scopes, so a
-    token only has the scope the test asks for.
+    mapper adds Tokenserver's audience) and a bad scope with the same audience
+    mapper are optional scopes, so a token only has the scope the test asks for.
     """
     # Let admins set the generation attribute, which isn't in the user profile
     profile = _keycloak_admin("GET", "/users/profile")
@@ -143,6 +143,21 @@ def _setup_keycloak_realm() -> None:
             "name": KEYCLOAK_BAD_SCOPE,
             "protocol": "openid-connect",
             "attributes": {"include.in.token.scope": "true"},
+            # Same audience as the oldsync scope, so a token with this scope
+            # differs from a good one only in its scope
+            "protocolMappers": [
+                {
+                    "name": "tokenserver audience",
+                    "protocol": "openid-connect",
+                    "protocolMapper": "oidc-audience-mapper",
+                    "config": {
+                        "included.custom.audience": "tokenserver",
+                        "id.token.claim": "false",
+                        "access.token.claim": "true",
+                        "introspection.token.claim": "true",
+                    },
+                }
+            ],
         },
     )
     if res.status_code != 409:

@@ -100,6 +100,10 @@ impl OidcTokenClaims {
                 "Unauthorized".to_string(),
             ));
         }
+        // The subject becomes the user's fxa_uid
+        if self.user.is_empty() {
+            return Err(unauthorized_err_with_ctx("Empty OIDC token subject"));
+        }
         if self.iss.trim_end_matches('/') != expected.issuer.trim_end_matches('/') {
             return Err(unauthorized_err_with_ctx("Unexpected OIDC token issuer"));
         }
@@ -1029,6 +1033,23 @@ mod tests {
             assert_eq!(err.context, "OIDC token is not yet valid");
         }
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_oidc_rejects_empty_subject() {
+        let err = verify_oidc_claims(json!({
+            "sub": "",
+            "azp": "thunderbird",
+            "scope": format!("openid {SYNC_SCOPE}"),
+            "iss": OIDC_ISSUER,
+            "aud": "tokenserver",
+        }))
+        .await
+        .unwrap_err();
+        assert_eq!(err.status, "invalid-credentials");
+        assert_eq!(err.http_status, 401);
+        assert_eq!(err.description, "Unauthorized");
+        assert_eq!(err.context, "Empty OIDC token subject");
     }
 
     #[tokio::test]

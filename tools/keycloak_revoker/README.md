@@ -41,8 +41,19 @@ and times, no user data.
 for which Keycloak's `GET /users/{sub}` returns 404. It catches deletions whose
 events the revoker never saw: it was down for longer than the realm keeps
 events, or it was deployed after them. Run it once when deploying the revoker,
-and then regularly, for example nightly. It refuses to run against a realm with
-no users at all.
+and then regularly, for example nightly.
+
+Retirement can't be undone, so reconcile retires nobody when Keycloak's answers
+look wrong:
+
+- `GET /users/count` must return 200 with a number other than 0
+- the revoker's own service-account user (its token's `sub`) must be found
+- a user counts as gone only on Keycloak's own `404 {"error":"User not found"}`;
+  any other answer, such as a 404 from a proxy that hides `/admin/`, stops the run
+- it retires at most `REVOKER_RECONCILE_MAX` users, and at most 10 % of the
+  active Tokenserver users of `FXA_EMAIL_DOMAIN`, in one run. If more are gone it
+  retires none and fails; once you have checked that Keycloak really lost them,
+  run `--reconcile --force`
 
 ## Settings
 
@@ -61,6 +72,7 @@ All from environment variables.
 | `REVOKER_OVERLAP` | 60 | Seconds each poll looks back before the cursor |
 | `REVOKER_TIMEOUT` | 10 | HTTP timeout in seconds |
 | `REVOKER_ATTEMPTS` | 4 | Attempts per Keycloak request on a 5xx or network error |
+| `REVOKER_RECONCILE_MAX` | 10 | The most users one `--reconcile` retires without `--force` |
 | `REVOKER_LOG_LEVEL` | `INFO` | |
 | `SYNC_TOKENSERVER__DATABASE_URL` | (required) | The Tokenserver database, as for Tokenserver |
 | `SYNC_TOKENSERVER__FXA_EMAIL_DOMAIN` | (required) | The same value as Tokenserver's |
@@ -96,6 +108,7 @@ poetry install --without dev
 poetry run python revoker.py               # poll forever
 poetry run python revoker.py --once        # poll once
 poetry run python revoker.py --reconcile   # reconcile once
+poetry run python revoker.py --reconcile --force   # without the cap
 ```
 
 Run a single instance: two revokers sharing a cursor file would only repeat each

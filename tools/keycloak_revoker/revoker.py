@@ -20,13 +20,15 @@ database:
 Disabling a user needs no action: Keycloak then refuses every refresh itself.
 Any other event is ignored. With --reconcile it instead retires every
 Tokenserver user whose Keycloak user no longer exists, which catches deletions
-whose events were missed.
+whose events were missed; it refuses when Keycloak's answers look wrong, or
+(without --force) when that would retire too many users.
 
 Settings come from the environment; see README.md. Logs name Keycloak user IDs
 only, never emails or secrets.
 """
 
 import argparse
+import base64
 import hashlib
 import json
 import logging
@@ -68,6 +70,11 @@ DELETE_USER_EVENTS = ("DELETE_ACCOUNT",)
 ADMIN_USER_PATH = re.compile(r"^users/([^/]+)(?:/(reset-password|logout))?$")
 
 PAGE_SIZE = 100
+# Keycloak's body for a 404 on a user that doesn't exist. A 404 without it may
+# come from a proxy or a wrong URL, and doesn't show that a user is gone.
+USER_NOT_FOUND = "User not found"
+# --reconcile retires at most this share of the active users without --force
+RECONCILE_MAX_SHARE = 0.1
 
 _ACTIVE_EMAILS = sqltext("""\
 select distinct
@@ -122,6 +129,16 @@ def admin_event_action(event: Mapping[str, Any]) -> Optional[Action]:
     return None
 
 
+def keycloak_error(res: requests.Response) -> Optional[str]:
+    """Return the `error` of a Keycloak JSON error body, or None if it has none."""
+    try:
+        body = res.json()
+    except ValueError:
+        return None
+    error = body.get("error") if isinstance(body, dict) else None
+    return error if isinstance(error, str) else None
+
+
 def event_key(kind: str, event: Mapping[str, Any]) -> str:
     """Return a key that identifies an event, for de-duplication."""
     if event.get("id"):
@@ -155,6 +172,7 @@ class Config:
     overlap: int = 60
     timeout: int = 10
     attempts: int = 4
+    reconcile_max: int = 10
 
     @classmethod
     def from_env(cls, env: Mapping[str, str]) -> "Config":
@@ -204,6 +222,7 @@ class Config:
             overlap=_env_int(env, "REVOKER_OVERLAP", 60),
             timeout=_env_int(env, "REVOKER_TIMEOUT", 10),
             attempts=_env_int(env, "REVOKER_ATTEMPTS", 4),
+            reconcile_max=_env_int(env, "REVOKER_RECONCILE_MAX", 10),
         )
         # database.py reads the URL itself; check it here so a missing URL fails
         # at startup rather than at the first deletion
@@ -342,14 +361,46 @@ class Keycloak:
         )
 
     def user_exists(self, user_id: str) -> bool:
-        """Return whether the user exists."""
+        """Return whether the user exists.
+
+        Only Keycloak's own "User not found" 404 counts as a missing user; any
+        other answer raises RevokerError.
+        """
         res = self.admin("GET", f"/users/{quote(user_id, safe='')}")
-        return res.status_code != 404
+        if res.status_code == 200:
+            return True
+        if res.status_code == 404 and keycloak_error(res) == USER_NOT_FOUND:
+            return False
+        raise RevokerError(f"GET /users/{{id}}: unexpected HTTP {res.status_code}")
 
     def user_count(self) -> int:
         """Return the number of users in the realm."""
-        count: int = self.admin("GET", "/users/count").json()
+        res = self.admin("GET", "/users/count")
+        try:
+            count = res.json() if res.status_code == 200 else None
+        except ValueError:
+            count = None
+        # bool is an int subclass, and JSON true is no count
+        if not isinstance(count, int) or isinstance(count, bool):
+            raise RevokerError(
+                f"GET /users/count: HTTP {res.status_code} without a user count"
+            )
         return count
+
+    def own_user_id(self) -> str:
+        """Return the ID of the revoker's service-account user (its token's sub)."""
+        token = self._get_token()
+        try:
+            payload = token.split(".")[1]
+            claims = json.loads(
+                base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4))
+            )
+            sub = claims["sub"]
+        except (IndexError, ValueError, KeyError, TypeError):
+            raise RevokerError("the revoker's token has no sub") from None
+        if not isinstance(sub, str) or not sub:
+            raise RevokerError("the revoker's token has no sub")
+        return sub
 
 
 @dataclass
@@ -472,28 +523,54 @@ class Revoker:
         cursor.save()
         return acted
 
-    def reconcile(self) -> int:
-        """Retire Tokenserver users whose Keycloak user is gone; return how many."""
+    def reconcile(self, force: bool = False) -> int:
+        """Retire Tokenserver users whose Keycloak user is gone; return how many.
+
+        Retirement can't be undone, so nothing is retired unless Keycloak
+        answers as expected for a user that certainly exists, and, without
+        `force`, not more than REVOKER_RECONCILE_MAX users or 10 % of the
+        active ones.
+        """
         # A Keycloak with no users at all is far more likely to be the wrong one
         # (or a broken one) than a realm whose every user was deleted
         if self.keycloak.user_count() == 0:
             raise RevokerError("the realm has no users; not reconciling")
+        # The revoker's own service-account user exists for sure: if Keycloak
+        # says otherwise, its answers about other users mean nothing either
+        if not self.keycloak.user_exists(self.keycloak.own_user_id()):
+            raise RevokerError(
+                "Keycloak reports the revoker's own service-account user as "
+                "missing; not reconciling"
+            )
         suffix = f"@{self.config.email_domain}"
         res = self.db._execute_sql(_ACTIVE_EMAILS)
         try:
             emails = [row[0] for row in res]
         finally:
             res.close()
-        retired = 0
-        for email in emails:
-            if not email.endswith(suffix):
-                continue
-            user_id = email[: -len(suffix)]
-            if user_id and not self.keycloak.user_exists(user_id):
-                self.retire(user_id)
-                logger.info("reconcile: retired keycloak user %s", user_id)
-                retired += 1
-        return retired
+        user_ids = [
+            email[: -len(suffix)]
+            for email in emails
+            if email.endswith(suffix) and len(email) > len(suffix)
+        ]
+        gone = [
+            user_id for user_id in user_ids if not self.keycloak.user_exists(user_id)
+        ]
+        too_many = (
+            len(gone) > self.config.reconcile_max
+            or len(gone) > len(user_ids) * RECONCILE_MAX_SHARE
+        )
+        if too_many and not force:
+            raise RevokerError(
+                f"reconcile would retire {len(gone)} of {len(user_ids)} active "
+                f"users, more than REVOKER_RECONCILE_MAX "
+                f"({self.config.reconcile_max}) or 10 %; retired none. If "
+                "Keycloak really lost these users, rerun with --force"
+            )
+        for user_id in gone:
+            self.retire(user_id)
+            logger.info("reconcile: retired keycloak user %s", user_id)
+        return len(gone)
 
 
 def main(argv: Optional[list[str]] = None) -> int:
@@ -506,7 +583,14 @@ def main(argv: Optional[list[str]] = None) -> int:
         action="store_true",
         help="retire Tokenserver users whose Keycloak user is gone, then exit",
     )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="with --reconcile: retire however many users are gone",
+    )
     args = parser.parse_args(argv)
+    if args.force and not args.reconcile:
+        parser.error("--force needs --reconcile")
     logging.basicConfig(
         level=os.environ.get("REVOKER_LOG_LEVEL", "INFO").upper(),
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
@@ -534,8 +618,12 @@ def main(argv: Optional[list[str]] = None) -> int:
         logger.error("%s", e)
         return 2
     revoker = Revoker(config)
+
+    def reconcile() -> int:
+        return revoker.reconcile(force=args.force)
+
     if args.reconcile:
-        return 0 if run(revoker.reconcile) else 1
+        return 0 if run(reconcile) else 1
     if args.once:
         return 0 if run(revoker.poll_once) else 1
     while True:

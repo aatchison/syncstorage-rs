@@ -3,6 +3,7 @@
 # You can obtain one at http://mozilla.org/MPL/2.0/.
 """Unit tests for revoker.py, against a fake Keycloak and a fake Tokenserver db."""
 
+import base64
 import json
 import logging
 import re
@@ -34,6 +35,9 @@ THUNDERBIRD_CLIENTS = ["thunderbird", "thunderbird-beta"]
 EMAIL_DOMAIN = "sync.example.com"
 ADMIN = f"/admin/realms/{REALM}"
 NOW_MS = 1_800_000_000_000
+# The revoker client's service-account user, the sub of its tokens
+SERVICE_ACCOUNT = "service-account-id"
+NOT_FOUND = object()
 
 
 class FakeKeycloak(BaseAdapter):
@@ -47,14 +51,16 @@ class FakeKeycloak(BaseAdapter):
         self.user_events = []
         self.admin_events = []
         self.requests = []
-        # [method, path regex, status or exception, times left]
+        # [method, path regex, status or exception, times left, body]
         self.failures = []
         self.token = None
         self.tokens_issued = 0
 
-    def fail(self, method, pattern, error=503, times=1):
-        """Make the next `times` matching requests fail with `error`."""
-        self.failures.append([method, re.compile(pattern), error, times])
+    def fail(self, method, pattern, error=503, times=1, body=NOT_FOUND):
+        """Make the next `times` matching requests fail with `error` and `body`."""
+        if body is NOT_FOUND:
+            body = {"error": "unavailable"}
+        self.failures.append([method, re.compile(pattern), error, times, body])
 
     def calls(self, method=None):
         """Return the (method, path) of the requests that changed state."""
@@ -69,12 +75,12 @@ class FakeKeycloak(BaseAdapter):
         path, query = url.path, parse_qs(url.query)
         self.requests.append((request.method, path, query))
         for failure in self.failures:
-            method, pattern, error, times = failure
+            method, pattern, error, times, body = failure
             if times and method == request.method and pattern.search(path):
                 failure[3] -= 1
                 if isinstance(error, Exception):
                     raise error
-                return self._response(request, error, {"error": "unavailable"})
+                return self._response(request, error, body)
 
         if path == f"/realms/{REALM}/protocol/openid-connect/token":
             form = parse_qs(request.body)
@@ -85,7 +91,9 @@ class FakeKeycloak(BaseAdapter):
             }:
                 return self._response(request, 401, {"error": "unauthorized_client"})
             self.tokens_issued += 1
-            self.token = f"token-{self.tokens_issued}"
+            claims = {"sub": SERVICE_ACCOUNT, "n": self.tokens_issued}
+            payload = base64.urlsafe_b64encode(json.dumps(claims).encode())
+            self.token = f"header.{payload.decode().rstrip('=')}.signature"
             return self._response(
                 request, 200, {"access_token": self.token, "expires_in": 300}
             )
@@ -105,7 +113,7 @@ class FakeKeycloak(BaseAdapter):
         if request.method == "GET" and route == "/users/count":
             return self._response(request, 200, len(self.users))
         match = re.fullmatch(r"/users/([^/]+)(/.*)?", route)
-        if not match or match.group(1) not in self.users:
+        if not match or match.group(1) not in self.users | {SERVICE_ACCOUNT}:
             return self._response(request, 404, {"error": "User not found"})
         user, rest = match.group(1), match.group(2)
         if request.method == "GET" and rest is None:
@@ -635,11 +643,13 @@ def test_reconcile_retires_users_gone_from_keycloak(tmp_path):
         ]
     )
     h = Harness(tmp_path, db=db)
-    assert h.revoker.reconcile() == 2
+    # 2 of 3 is over the cap; test_reconcile_cap covers that
+    assert h.revoker.reconcile(force=True) == 2
     assert db.retired == [f"dave@{EMAIL_DOMAIN}", f"erin@{EMAIL_DOMAIN}"]
     looked_up = [p for m, p, _ in h.keycloak.requests if "/users/" in p]
     assert looked_up == [
-        f"{ADMIN}/users/{u}" for u in ("count", "alice", "dave", "erin")
+        f"{ADMIN}/users/{u}"
+        for u in ("count", SERVICE_ACCOUNT, "alice", "dave", "erin")
     ]
     # Running it again finds nothing more
     assert h.revoker.reconcile() == 0
@@ -652,6 +662,125 @@ def test_reconcile_refuses_an_empty_realm(tmp_path):
     with pytest.raises(RevokerError, match="no users"):
         h.revoker.reconcile()
     assert db.retired == []
+
+
+def active_users(count, gone):
+    """Return a FakeDb with `count` active users, the first `gone` not in Keycloak."""
+    return FakeDb(
+        [f"gone-{i}@{EMAIL_DOMAIN}" for i in range(gone)]
+        + [f"alice@{EMAIL_DOMAIN}"] * (count - gone)
+    )
+
+
+@pytest.mark.parametrize(
+    "body",
+    [None, {"error": "HTTP 404 Not Found"}, "<html>Not Found</html>"],
+    ids=["empty", "other-error", "html"],
+)
+def test_reconcile_refuses_when_every_admin_path_404s(tmp_path, body):
+    # A proxy that hides /admin/, or a wrong path prefix
+    db = active_users(3, gone=0)
+    h = Harness(tmp_path, db=db)
+    h.keycloak.fail("GET", r"^/admin/", 404, times=99, body=body)
+    with pytest.raises(RevokerError, match="users/count"):
+        h.revoker.reconcile()
+    assert db.retired == []
+
+
+@pytest.mark.parametrize(
+    "body",
+    [None, {"error": "HTTP 404 Not Found"}, "<html>Not Found</html>"],
+    ids=["empty", "other-error", "html"],
+)
+def test_reconcile_refuses_when_user_lookups_404_without_keycloak_body(tmp_path, body):
+    db = FakeDb([f"alice@{EMAIL_DOMAIN}", f"dave@{EMAIL_DOMAIN}"])
+    h = Harness(tmp_path, db=db)
+    h.keycloak.fail("GET", r"/users/(?!count$)[^/]+$", 404, times=99, body=body)
+    with pytest.raises(RevokerError, match="unexpected HTTP 404"):
+        h.revoker.reconcile(force=True)
+    assert db.retired == []
+
+
+def test_reconcile_refuses_when_its_own_user_is_reported_missing(tmp_path):
+    # Every user lookup gets Keycloak's own "User not found": the revoker's
+    # service-account user too, which certainly exists
+    db = FakeDb([f"alice@{EMAIL_DOMAIN}", f"dave@{EMAIL_DOMAIN}"])
+    h = Harness(tmp_path, db=db)
+    h.keycloak.fail(
+        "GET",
+        r"/users/(?!count$)[^/]+$",
+        404,
+        times=99,
+        body={"error": "User not found"},
+    )
+    with pytest.raises(RevokerError, match="own service-account user"):
+        h.revoker.reconcile(force=True)
+    assert db.retired == []
+
+
+@pytest.mark.parametrize(
+    "status,body",
+    [
+        (200, {"error": "unknown"}),
+        (200, "3"),
+        (200, True),
+        (200, None),
+        (404, {"error": "HTTP 404 Not Found"}),
+        (204, None),
+    ],
+    ids=["dict", "string", "bool", "empty", "404", "204"],
+)
+def test_reconcile_refuses_when_the_count_is_not_an_int(tmp_path, status, body):
+    db = FakeDb([f"dave@{EMAIL_DOMAIN}"])
+    h = Harness(tmp_path, db=db)
+    h.keycloak.fail("GET", r"/users/count$", status, times=99, body=body)
+    with pytest.raises(RevokerError, match="without a user count"):
+        h.revoker.reconcile(force=True)
+    assert db.retired == []
+
+
+@pytest.mark.parametrize(
+    "count,gone,refused",
+    [
+        (200, 10, False),  # REVOKER_RECONCILE_MAX, 5 %
+        (200, 11, True),  # more than REVOKER_RECONCILE_MAX
+        (20, 2, False),  # 10 %
+        (20, 3, True),  # more than 10 %
+        (5, 1, True),
+    ],
+)
+def test_reconcile_cap(tmp_path, count, gone, refused):
+    db = active_users(count, gone)
+    h = Harness(tmp_path, db=db)
+    if refused:
+        with pytest.raises(RevokerError, match=f"retire {gone} of {count} active"):
+            h.revoker.reconcile()
+        # All or nothing: none was retired
+        assert db.retired == []
+        assert h.revoker.reconcile(force=True) == gone
+    else:
+        assert h.revoker.reconcile() == gone
+    assert sorted(db.retired) == sorted(f"gone-{i}@{EMAIL_DOMAIN}" for i in range(gone))
+
+
+def test_reconcile_max_setting(tmp_path):
+    db = active_users(1000, gone=3)
+    h = Harness(tmp_path, db=db)
+    h.config.reconcile_max = 2
+    with pytest.raises(RevokerError, match="REVOKER_RECONCILE_MAX \\(2\\)"):
+        h.revoker.reconcile()
+    assert db.retired == []
+    assert Config.from_env(make_env(tmp_path)).reconcile_max == 10
+    config = Config.from_env(make_env(tmp_path, REVOKER_RECONCILE_MAX="50"))
+    assert config.reconcile_max == 50
+
+
+def test_main_force_needs_reconcile(tmp_path, monkeypatch):
+    for name, value in make_env(tmp_path).items():
+        monkeypatch.setenv(name, value)
+    with pytest.raises(SystemExit) as exc:
+        revoker.main(["--once", "--force"])
+    assert exc.value.code == 2
 
 
 def test_reconcile_stops_when_keycloak_is_down(tmp_path):
@@ -722,7 +851,7 @@ def test_logs_have_no_secrets_or_emails(tmp_path, caplog):
     h.admin_event("DELETE", "users/carol", offset_ms=2000)
     h.keycloak.fail("POST", r"/logout$", 503, times=1)
     h.revoker.poll_once()
-    h.revoker.reconcile()
+    h.revoker.reconcile(force=True)
     assert "keycloak user alice" in caplog.text
     assert "keycloak user carol" in caplog.text
     assert "keycloak user dave" in caplog.text

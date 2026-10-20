@@ -82,7 +82,10 @@ The realm must store events:
 
 The revoker authenticates as the service account of a confidential client with
 only the client-credentials grant, whose service account has the
-`realm-management` roles `view-events`, `view-users` and `manage-users`.
+`realm-management` roles `view-events`, `view-users` and `manage-users`. The dev
+realm, `keycloak/realm-export.json`, has such a client, `keycloak-revoker`,
+without a secret: `keycloak/start-services.sh` generates one into
+`/tmp/syncstorage-test-secrets/keycloak-revoker-secret`.
 
 ## Running it
 

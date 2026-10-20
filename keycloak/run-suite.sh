@@ -33,7 +33,8 @@ for line in sys.stdin:
     for s in secrets:
         line = line.replace(s, "********")
     sys.stdout.write(line)
-' "$SECRETS_DIR/mysql-root-password" "$SECRETS_DIR/keycloak-admin-password"
+' "$SECRETS_DIR/mysql-root-password" "$SECRETS_DIR/keycloak-admin-password" \
+    "$SECRETS_DIR/keycloak-revoker-secret"
 }
 
 summary=()
@@ -140,6 +141,10 @@ main() {
     export KEYCLOAK_ADMIN_USERNAME=admin
     export KEYCLOAK_ADMIN_PASSWORD="$keycloak_pw"
     export SQLALCHEMY_SILENCE_UBER_WARNING=1
+    # tools/keycloak_revoker; its live tests take Keycloak's URL and realm from
+    # SYNC_TOKENSERVER__OIDC_ISSUER_URL
+    export REVOKER_CLIENT_ID=keycloak-revoker
+    export REVOKER_CLIENT_SECRET_FILE="$SECRETS_DIR/keycloak-revoker-secret"
 
     step "(a) build" cargo build "${OIDC_FEATURES[@]}"
     step "(b) fmt" cargo fmt -- --check

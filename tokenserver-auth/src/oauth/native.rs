@@ -779,9 +779,20 @@ mod tests {
 
     #[tokio::test]
     async fn test_oidc_does_not_fall_back_to_remote_verify() -> Result<(), TokenserverError> {
+        // A remote verify would POST to the issuer
+        let mut server = mockito::Server::new_async().await;
+        let mock_verify = server
+            .mock("POST", mockito::Matcher::Any)
+            .expect(0)
+            .create_async()
+            .await;
+        let settings = Settings {
+            oidc_issuer_url: Some(format!("{}/realms/sync", server.url())),
+            ..oidc_settings()
+        };
         mock_jwk_verifier!(Err(JWTVerifyError::DecodingError));
         let jwk_verifiers = vec![MockJWTVerifier {}];
-        let verifier: Verifier<MockJWTVerifier> = Verifier::new(&oidc_settings(), jwk_verifiers)?;
+        let verifier: Verifier<MockJWTVerifier> = Verifier::new(&settings, jwk_verifiers)?;
         let err = verifier
             .verify(
                 "invalid token that can't be decoded".to_string(),
@@ -792,6 +803,73 @@ mod tests {
         assert_eq!(err.status, "invalid-credentials");
         assert_eq!(err.http_status, 401);
         assert_eq!(err.description, "Unauthorized");
+        assert_eq!(err.context, JWTVerifyError::DecodingError.to_string());
+        mock_verify.assert_async().await;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_oidc_with_jwt_verifier() -> Result<(), TokenserverError> {
+        use crate::test_utils::{OTHER_PRIVATE_KEY_PEM, TEST_PRIVATE_KEY_PEM};
+        use jsonwebtoken::{Algorithm, EncodingKey, Header, encode};
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+        let token = |typ: &str, exp: i64, private_key_pem: &[u8]| {
+            let header = Header {
+                typ: Some(typ.to_owned()),
+                ..Header::new(Algorithm::RS256)
+            };
+            let claims = json!({
+                "sub": "keycloak_user_id",
+                "scope": format!("openid {SYNC_SCOPE}"),
+                "iss": OIDC_ISSUER,
+                "aud": ["account", "tokenserver"],
+                "exp": exp,
+            });
+            let key = EncodingKey::from_rsa_pem(private_key_pem).unwrap();
+            encode(&header, &claims, &key).unwrap()
+        };
+        let jwk_verifiers = vec![JWTVerifierImpl::try_from(test_jwk()).unwrap()];
+        let verifier: Verifier<JWTVerifierImpl> = Verifier::new(&oidc_settings(), jwk_verifiers)?;
+
+        let res = verifier
+            .verify(
+                token("at+jwt", now + 300, TEST_PRIVATE_KEY_PEM),
+                &Default::default(),
+            )
+            .await?;
+        assert_eq!(res.fxa_uid, "keycloak_user_id");
+        assert_eq!(res.generation, None);
+
+        for (token, context) in [
+            // Not an RFC 9068 access token, e.g. an ID token
+            (
+                token("JWT", now + 300, TEST_PRIVATE_KEY_PEM),
+                JWTVerifyError::TrustError,
+            ),
+            (
+                token("at+jwt", now - 3600, TEST_PRIVATE_KEY_PEM),
+                JWTVerifyError::ExpiredSignature,
+            ),
+            // Every key fails on the signature
+            (
+                token("at+jwt", now + 300, OTHER_PRIVATE_KEY_PEM),
+                JWTVerifyError::TrustError,
+            ),
+        ] {
+            let err = verifier
+                .verify(token, &Default::default())
+                .await
+                .unwrap_err();
+            assert_eq!(err.status, "invalid-credentials");
+            assert_eq!(err.http_status, 401);
+            assert_eq!(err.description, "Unauthorized");
+            assert_eq!(err.context, context.to_string());
+        }
         Ok(())
     }
 

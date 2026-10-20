@@ -261,12 +261,31 @@ where
         struct KeysResponse<K> {
             keys: Vec<K>,
         }
-        self.http_client
+        let res = self
+            .http_client
             .get(self.jwks_url.clone())
             .send()
             .await
-            .map_err(internal_err_with_ctx)?
-            .json::<KeysResponse<J::Key>>()
+            .map_err(internal_err_with_ctx)?;
+        if self.oidc.is_some() {
+            // An OIDC provider's JWKS can also hold encryption keys, which must not verify
+            // signatures
+            return res
+                .json::<KeysResponse<serde_json::Value>>()
+                .await
+                .map_err(internal_err_with_ctx)?
+                .keys
+                .into_iter()
+                .filter(is_oidc_signing_key)
+                .map(|key| {
+                    serde_json::from_value::<J::Key>(key)
+                        .map_err(internal_err_with_ctx)?
+                        .try_into()
+                        .map_err(internal_err_with_ctx)
+                })
+                .collect();
+        }
+        res.json::<KeysResponse<J::Key>>()
             .await
             .map_err(internal_err_with_ctx)?
             .keys
@@ -381,6 +400,13 @@ where
         };
         claims.validate()
     }
+}
+
+/// Whether an OIDC JWK can verify a token: one whose `use` and `alg`, if present, are "sig" and
+/// "RS256", the only algorithm the JWT verifier accepts
+fn is_oidc_signing_key(key: &serde_json::Value) -> bool {
+    let is = |field: &str, expected: &str| key.get(field).is_none_or(|value| value == expected);
+    is("use", "sig") && is("alg", "RS256")
 }
 
 fn unauthorized_err_with_ctx<E: std::fmt::Display>(err: E) -> TokenserverError {
@@ -1081,6 +1107,80 @@ mod tests {
         assert_eq!(err.http_status, 401);
         assert_eq!(err.description, "Unauthorized");
         assert_eq!(err.context, "Empty OIDC token subject");
+    }
+
+    #[tokio::test]
+    async fn test_oidc_skips_non_signing_jwks() -> Result<(), TokenserverError> {
+        use crate::test_utils::{TEST_JWK, TEST_PRIVATE_KEY_PEM};
+        use jsonwebtoken::{Algorithm, EncodingKey, Header, encode};
+
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+        let mut server = mockito::Server::new_async().await;
+        let issuer = format!("{}/realms/sync", server.url());
+        let header = Header {
+            typ: Some("at+jwt".to_owned()),
+            ..Header::new(Algorithm::RS256)
+        };
+        let claims = json!({
+            "sub": "keycloak_user_id",
+            "azp": "thunderbird",
+            "scope": format!("openid {SYNC_SCOPE}"),
+            "iss": issuer,
+            "aud": "tokenserver",
+            "exp": now + 300,
+        });
+        let key = EncodingKey::from_rsa_pem(TEST_PRIVATE_KEY_PEM).unwrap();
+        let token = encode(&header, &claims, &key).unwrap();
+        let settings = Settings {
+            oidc_issuer_url: Some(issuer),
+            ..oidc_settings()
+        };
+        // The key that signed the token, with the given `use` and `alg`
+        let jwks = |use_: Option<&str>, alg: Option<&str>| {
+            let mut jwk: serde_json::Value = serde_json::from_str(TEST_JWK).unwrap();
+            let jwk_object = jwk.as_object_mut().unwrap();
+            jwk_object.remove("alg");
+            if let Some(use_) = use_ {
+                jwk_object.insert("use".to_owned(), json!(use_));
+            }
+            if let Some(alg) = alg {
+                jwk_object.insert("alg".to_owned(), json!(alg));
+            }
+            json!({ "keys": [jwk] }).to_string()
+        };
+
+        for (use_, alg, accepted) in [
+            (Some("sig"), Some("RS256"), true),
+            (None, None, true),
+            (Some("enc"), Some("RSA-OAEP"), false),
+            (Some("enc"), None, false),
+            (None, Some("RSA-OAEP"), false),
+            (Some("sig"), Some("PS256"), false),
+        ] {
+            let mock_jwks = server
+                .mock("GET", "/realms/sync/protocol/openid-connect/certs")
+                .with_header("content-type", "application/json")
+                .with_body(jwks(use_, alg))
+                .expect(1)
+                .create_async()
+                .await;
+            let verifier: Verifier<JWTVerifierImpl> = Verifier::new(&settings, vec![])?;
+            let res = verifier.verify(token.clone(), &Default::default()).await;
+            if accepted {
+                assert_eq!(res?.fxa_uid, "keycloak_user_id");
+            } else {
+                let err = res.unwrap_err();
+                assert_eq!(err.status, "invalid-credentials");
+                assert_eq!(err.http_status, 401);
+                assert_eq!(err.description, "Unauthorized");
+            }
+            mock_jwks.assert_async().await;
+            mock_jwks.remove_async().await;
+        }
+        Ok(())
     }
 
     #[tokio::test]

@@ -1,0 +1,28 @@
+[project]
+name = "keycloak-revoker"
+version = "0.1.0"
+description = "Revokes Keycloak sessions and retires Tokenserver users from Keycloak events"
+readme = "README.md"
+requires-python = ">=3.10.0,<4.0"
+license = "Mozilla Public License Version 2.0"
+
+[tool.poetry]
+package-mode = false
+
+[tool.poetry.dependencies]
+requests = "^2.33.1"
+# tools/tokenserver/database.py (retire_user), and what it imports
+sqlalchemy = "^1.4.46"
+mysqlclient = "^2.1.8"
+datadog = "^0.51.0"
+pytest = "^9.0.3"
+
+[tool.poetry.group.dev.dependencies]
+mypy = "^1.19.1"
+pydocstyle = "^6.3.0"
+ruff = "^0.15.6"
+bandit = "^1.9.4"
+
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"

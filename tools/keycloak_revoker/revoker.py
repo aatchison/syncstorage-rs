@@ -1,0 +1,547 @@
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this file,
+# You can obtain one at http://mozilla.org/MPL/2.0/.
+"""Revoke Keycloak sessions and retire Tokenserver users from Keycloak events.
+
+Keycloak has no webhook, so this polls the realm's stored user events and admin
+events and acts on them through the Keycloak admin API and the Tokenserver
+database:
+
+  password change (user events UPDATE_CREDENTIAL / UPDATE_PASSWORD, admin
+  ACTION users/<id>/reset-password)
+      sign the user out of every session (POST users/<id>/logout), then revoke
+      their offline sessions of each configured client
+      (DELETE users/<id>/consents/<client>)
+  admin sign-out (ACTION users/<id>/logout)
+      revoke the offline sessions, which Keycloak's sign-out leaves alive
+  user deleted (admin DELETE users/<id>, user event DELETE_ACCOUNT)
+      retire the Tokenserver user "<id>@<FXA_EMAIL_DOMAIN>"
+
+Disabling a user needs no action: Keycloak then refuses every refresh itself.
+Any other event is ignored. With --reconcile it instead retires every
+Tokenserver user whose Keycloak user no longer exists, which catches deletions
+whose events were missed.
+
+Settings come from the environment; see README.md. Logs name Keycloak user IDs
+only, never emails or secrets.
+"""
+
+import argparse
+import hashlib
+import json
+import logging
+import os
+import re
+import sys
+import tempfile
+import time
+from dataclasses import dataclass, field
+from typing import Any, Callable, Mapping, Optional
+from urllib.parse import quote
+
+import requests
+from sqlalchemy.sql import text as sqltext
+
+# tools/tokenserver's modules import each other as top-level modules, as its
+# scripts run with that directory on the path
+try:
+    from database import Database
+except ImportError:
+    sys.path.insert(
+        0,
+        os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "tokenserver"
+        ),
+    )
+    from database import Database
+
+logger = logging.getLogger("keycloak_revoker")
+
+# What to do for an event
+REVOKE_ALL = "revoke-all-sessions"
+REVOKE_OFFLINE = "revoke-offline-sessions"
+RETIRE = "retire-tokenserver-user"
+
+PASSWORD_USER_EVENTS = ("UPDATE_CREDENTIAL", "UPDATE_PASSWORD")
+DELETE_USER_EVENTS = ("DELETE_ACCOUNT",)
+# users/<id>, users/<id>/reset-password or users/<id>/logout, nothing deeper
+ADMIN_USER_PATH = re.compile(r"^users/([^/]+)(?:/(reset-password|logout))?$")
+
+PAGE_SIZE = 100
+
+_ACTIVE_EMAILS = sqltext("""\
+select distinct
+    email
+from
+    users
+where
+    replaced_at is null
+""")
+
+
+class RevokerError(Exception):
+    """A failure that stops this poll or reconcile; it is safe to log."""
+
+
+@dataclass(frozen=True)
+class Action:
+    """An action to take for one Keycloak user."""
+
+    kind: str
+    user_id: str
+
+
+def user_event_action(event: Mapping[str, Any]) -> Optional[Action]:
+    """Return the action for a Keycloak user event, or None to ignore it."""
+    user_id = event.get("userId")
+    if not user_id or event.get("error"):
+        return None
+    if event.get("type") in PASSWORD_USER_EVENTS:
+        # Whether or not the user ticked "Sign out from other devices"
+        return Action(REVOKE_ALL, user_id)
+    if event.get("type") in DELETE_USER_EVENTS:
+        return Action(RETIRE, user_id)
+    return None
+
+
+def admin_event_action(event: Mapping[str, Any]) -> Optional[Action]:
+    """Return the action for a Keycloak admin event, or None to ignore it."""
+    if event.get("resourceType") != "USER" or event.get("error"):
+        return None
+    match = ADMIN_USER_PATH.match(event.get("resourcePath") or "")
+    if not match:
+        return None
+    user_id, sub_resource = match.groups()
+    operation = event.get("operationType")
+    if operation == "ACTION" and sub_resource == "reset-password":
+        return Action(REVOKE_ALL, user_id)
+    if operation == "ACTION" and sub_resource == "logout":
+        return Action(REVOKE_OFFLINE, user_id)
+    if operation == "DELETE" and sub_resource is None:
+        return Action(RETIRE, user_id)
+    return None
+
+
+def event_key(kind: str, event: Mapping[str, Any]) -> str:
+    """Return a key that identifies an event, for de-duplication."""
+    if event.get("id"):
+        return f"{kind}:{event['id']}"
+    digest = hashlib.sha256(json.dumps(event, sort_keys=True).encode()).hexdigest()
+    return f"{kind}:{digest}"
+
+
+def _env_int(env: Mapping[str, str], name: str, default: int) -> int:
+    value = env.get(name)
+    if not value:
+        return default
+    try:
+        return int(value)
+    except ValueError:
+        raise RevokerError(f"{name} must be an integer") from None
+
+
+@dataclass
+class Config:
+    """Settings, from environment variables (see from_env)."""
+
+    keycloak_url: str
+    realm: str
+    client_id: str
+    client_secret: str = field(repr=False)
+    offline_clients: list[str]
+    email_domain: str
+    cursor_file: str
+    interval: int = 15
+    overlap: int = 60
+    timeout: int = 10
+    attempts: int = 4
+
+    @classmethod
+    def from_env(cls, env: Mapping[str, str]) -> "Config":
+        """Read the settings, raising RevokerError for a missing or bad one."""
+
+        def required(name: str) -> str:
+            value = env.get(name, "").strip()
+            if not value:
+                raise RevokerError(f"{name} must be set")
+            return value
+
+        secret_file = env.get("REVOKER_CLIENT_SECRET_FILE", "").strip()
+        if secret_file:
+            try:
+                with open(secret_file) as f:
+                    secret = f.read().strip()
+            except OSError as e:
+                raise RevokerError(
+                    f"can't read REVOKER_CLIENT_SECRET_FILE: {e.strerror}"
+                ) from None
+        else:
+            secret = env.get("REVOKER_CLIENT_SECRET", "").strip()
+        if not secret:
+            raise RevokerError(
+                "REVOKER_CLIENT_SECRET_FILE or REVOKER_CLIENT_SECRET must be set"
+            )
+        # The clients Thunderbird signs in with: by default the ones Tokenserver
+        # accepts tokens from
+        clients = env.get("REVOKER_OFFLINE_CLIENTS") or env.get(
+            "SYNC_TOKENSERVER__OIDC_ALLOWED_CLIENTS", ""
+        )
+        offline_clients = [c.strip() for c in clients.split(",") if c.strip()]
+        if not offline_clients:
+            raise RevokerError(
+                "REVOKER_OFFLINE_CLIENTS or SYNC_TOKENSERVER__OIDC_ALLOWED_CLIENTS "
+                "must be set"
+            )
+        config = cls(
+            keycloak_url=required("REVOKER_KEYCLOAK_URL").rstrip("/"),
+            realm=required("REVOKER_REALM"),
+            client_id=env.get("REVOKER_CLIENT_ID", "").strip() or "keycloak-revoker",
+            client_secret=secret,
+            offline_clients=offline_clients,
+            email_domain=required("SYNC_TOKENSERVER__FXA_EMAIL_DOMAIN"),
+            cursor_file=required("REVOKER_CURSOR_FILE"),
+            interval=_env_int(env, "REVOKER_INTERVAL", 15),
+            overlap=_env_int(env, "REVOKER_OVERLAP", 60),
+            timeout=_env_int(env, "REVOKER_TIMEOUT", 10),
+            attempts=_env_int(env, "REVOKER_ATTEMPTS", 4),
+        )
+        # database.py reads the URL itself; check it here so a missing URL fails
+        # at startup rather than at the first deletion
+        required("SYNC_TOKENSERVER__DATABASE_URL")
+        return config
+
+
+class Keycloak:
+    """The parts of the Keycloak admin API the revoker uses.
+
+    Authenticates as the revoker client's service account. A 5xx response or a
+    network error is retried with exponential backoff; when the attempts run
+    out RevokerError is raised.
+    """
+
+    def __init__(
+        self,
+        config: Config,
+        session: Optional[requests.Session] = None,
+        sleep: Callable[[float], None] = time.sleep,
+    ):
+        self.config = config
+        self.session = session or requests.Session()
+        self.sleep = sleep
+        self._token: Optional[str] = None
+        self._token_expires = 0.0
+
+    def _send(self, method: str, url: str, **kwargs: Any) -> requests.Response:
+        """Send a request, retrying 5xx responses and network errors."""
+        what = f"{method} {url.removeprefix(self.config.keycloak_url)}"
+        for attempt in range(self.config.attempts):
+            if attempt:
+                self.sleep(2 ** (attempt - 1))
+            try:
+                res = self.session.request(
+                    method, url, timeout=self.config.timeout, **kwargs
+                )
+            except requests.RequestException as e:
+                logger.warning(
+                    "%s: %s (attempt %d)", what, type(e).__name__, attempt + 1
+                )
+                continue
+            if res.status_code < 500:
+                return res
+            logger.warning(
+                "%s: HTTP %d (attempt %d)", what, res.status_code, attempt + 1
+            )
+        raise RevokerError(f"{what}: Keycloak unavailable")
+
+    def _get_token(self) -> str:
+        if self._token and time.monotonic() < self._token_expires:
+            return self._token
+        res = self._send(
+            "POST",
+            f"{self.config.keycloak_url}/realms/{self.config.realm}"
+            "/protocol/openid-connect/token",
+            data={
+                "grant_type": "client_credentials",
+                "client_id": self.config.client_id,
+                "client_secret": self.config.client_secret,
+            },
+        )
+        if res.status_code != 200:
+            raise RevokerError(
+                f"can't get a token for client {self.config.client_id}: "
+                f"HTTP {res.status_code}"
+            )
+        body = res.json()
+        self._token = body["access_token"]
+        self._token_expires = time.monotonic() + max(body.get("expires_in", 60) - 30, 0)
+        return self._token
+
+    def admin(
+        self, method: str, path: str, params: Optional[Mapping[str, Any]] = None
+    ) -> requests.Response:
+        """Call the realm's admin API. 2xx and 404 are returned; other errors raise."""
+        url = f"{self.config.keycloak_url}/admin/realms/{self.config.realm}{path}"
+        for _ in range(2):
+            headers = {"Authorization": f"Bearer {self._get_token()}"}
+            res = self._send(method, url, params=params, headers=headers)
+            if res.status_code == 401:
+                # The token expired or was revoked: get a new one, once
+                self._token = None
+                continue
+            break
+        if res.status_code != 404 and not 200 <= res.status_code < 300:
+            raise RevokerError(f"{method} {path}: HTTP {res.status_code}")
+        return res
+
+    def _events(self, path: str, params: Mapping[str, Any]) -> list[dict]:
+        events: list[dict] = []
+        while True:
+            page = {**params, "first": len(events), "max": PAGE_SIZE}
+            res = self.admin("GET", path, params=page)
+            if res.status_code != 200:
+                raise RevokerError(f"GET {path}: HTTP {res.status_code}")
+            batch = res.json()
+            events.extend(batch)
+            if len(batch) < PAGE_SIZE:
+                return events
+
+    def user_events(self, since_ms: int) -> list[dict]:
+        """Return the user events stored since `since_ms`, oldest first."""
+        return self._events(
+            "/events",
+            {
+                "type": [*PASSWORD_USER_EVENTS, *DELETE_USER_EVENTS],
+                "dateFrom": str(since_ms),
+                "direction": "asc",
+            },
+        )
+
+    def admin_events(self, since_ms: int) -> list[dict]:
+        """Return the admin events on users stored since `since_ms`, oldest first."""
+        return self._events(
+            "/admin-events",
+            {
+                "resourceTypes": ["USER"],
+                "operationTypes": ["ACTION", "DELETE"],
+                "dateFrom": str(since_ms),
+                "direction": "asc",
+            },
+        )
+
+    def logout(self, user_id: str) -> None:
+        """Sign the user out of all their (online) sessions."""
+        self.admin("POST", f"/users/{quote(user_id, safe='')}/logout")
+
+    def revoke_offline(self, user_id: str, client_id: str) -> None:
+        """Revoke the user's offline sessions (and consent) for a client."""
+        # 404: the user has no consent or offline session for the client, or
+        # no longer exists. Either way nothing is left to revoke.
+        self.admin(
+            "DELETE",
+            f"/users/{quote(user_id, safe='')}/consents/{quote(client_id, safe='')}",
+        )
+
+    def user_exists(self, user_id: str) -> bool:
+        """Return whether the user exists."""
+        res = self.admin("GET", f"/users/{quote(user_id, safe='')}")
+        return res.status_code != 404
+
+    def user_count(self) -> int:
+        """Return the number of users in the realm."""
+        count: int = self.admin("GET", "/users/count").json()
+        return count
+
+
+@dataclass
+class Cursor:
+    """Where the event polling has got to, persisted as JSON.
+
+    `time` is the time of the newest event handled. Each poll asks for events
+    from `time - overlap`, so an event that Keycloak stored late still turns
+    up; `seen` holds the keys of the events handled in that window, so none is
+    handled twice. `floor` is when the revoker first started: older events are
+    never handled.
+    """
+
+    path: str
+    time: int
+    floor: int
+    seen: dict[str, int]
+
+    @classmethod
+    def load(cls, path: str, now_ms: int) -> "Cursor":
+        """Load the cursor, or start one at `now_ms` if there is none."""
+        try:
+            with open(path) as f:
+                data = json.load(f)
+        except FileNotFoundError:
+            cursor = cls(path, now_ms, now_ms, {})
+            cursor.save()
+            logger.info("no cursor file; starting from now")
+            return cursor
+        except (OSError, ValueError) as e:
+            raise RevokerError(f"can't read the cursor file: {e}") from None
+        return cls(path, int(data["time"]), int(data["floor"]), dict(data["seen"]))
+
+    def save(self) -> None:
+        """Write the cursor atomically."""
+        directory = os.path.dirname(os.path.abspath(self.path))
+        fd, tmp = tempfile.mkstemp(dir=directory, prefix=".revoker-cursor-")
+        try:
+            with os.fdopen(fd, "w") as f:
+                json.dump(
+                    {"time": self.time, "floor": self.floor, "seen": self.seen}, f
+                )
+            os.replace(tmp, self.path)
+        except BaseException:
+            os.unlink(tmp)
+            raise
+
+
+class Revoker:
+    """Applies the actions for Keycloak events, and the reconcile."""
+
+    def __init__(
+        self,
+        config: Config,
+        keycloak: Optional[Keycloak] = None,
+        db_factory: Callable[[], Any] = Database,
+        clock: Callable[[], float] = time.time,
+    ):
+        self.config = config
+        self.keycloak = keycloak or Keycloak(config)
+        self._db_factory = db_factory
+        self._db: Any = None
+        self.clock = clock
+
+    @property
+    def db(self) -> Any:
+        """Return the Tokenserver database, connecting on first use."""
+        if self._db is None:
+            self._db = self._db_factory()
+        return self._db
+
+    def retire(self, user_id: str) -> None:
+        """Retire the Tokenserver user of a Keycloak user."""
+        self.db.retire_user(f"{user_id}@{self.config.email_domain}")
+
+    def apply(self, action: Action) -> None:
+        """Take an action."""
+        if action.kind == REVOKE_ALL:
+            self.keycloak.logout(action.user_id)
+        if action.kind in (REVOKE_ALL, REVOKE_OFFLINE):
+            for client_id in self.config.offline_clients:
+                self.keycloak.revoke_offline(action.user_id, client_id)
+        if action.kind == RETIRE:
+            self.retire(action.user_id)
+        logger.info("%s: keycloak user %s", action.kind, action.user_id)
+
+    def poll_once(self) -> int:
+        """Handle the events stored since the cursor; return how many acted on.
+
+        The cursor is saved only when every event got handled, so after a
+        failure the next poll starts from the same place.
+        """
+        cursor = Cursor.load(self.config.cursor_file, int(self.clock() * 1000))
+        overlap_ms = self.config.overlap * 1000
+        since = max(cursor.time - overlap_ms, cursor.floor)
+        events = [("user", e) for e in self.keycloak.user_events(since)]
+        events += [("admin", e) for e in self.keycloak.admin_events(since)]
+        events.sort(key=lambda item: item[1].get("time", 0))
+
+        seen = dict(cursor.seen)
+        newest = cursor.time
+        acted = 0
+        for kind, event in events:
+            key = event_key(kind, event)
+            event_time = int(event.get("time", 0))
+            if key in seen or event_time < cursor.floor:
+                continue
+            if kind == "user":
+                action = user_event_action(event)
+            else:
+                action = admin_event_action(event)
+            if action:
+                self.apply(action)
+                acted += 1
+            seen[key] = event_time
+            newest = max(newest, event_time)
+
+        cursor.time = newest
+        cursor.seen = {k: t for k, t in seen.items() if t >= newest - overlap_ms}
+        cursor.save()
+        return acted
+
+    def reconcile(self) -> int:
+        """Retire Tokenserver users whose Keycloak user is gone; return how many."""
+        # A Keycloak with no users at all is far more likely to be the wrong one
+        # (or a broken one) than a realm whose every user was deleted
+        if self.keycloak.user_count() == 0:
+            raise RevokerError("the realm has no users; not reconciling")
+        suffix = f"@{self.config.email_domain}"
+        res = self.db._execute_sql(_ACTIVE_EMAILS)
+        try:
+            emails = [row[0] for row in res]
+        finally:
+            res.close()
+        retired = 0
+        for email in emails:
+            if not email.endswith(suffix):
+                continue
+            user_id = email[: -len(suffix)]
+            if user_id and not self.keycloak.user_exists(user_id):
+                self.retire(user_id)
+                logger.info("reconcile: retired keycloak user %s", user_id)
+                retired += 1
+        return retired
+
+
+def main(argv: Optional[list[str]] = None) -> int:
+    """Run the revoker; returns the exit status."""
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--once", action="store_true", help="poll once, then exit")
+    mode.add_argument(
+        "--reconcile",
+        action="store_true",
+        help="retire Tokenserver users whose Keycloak user is gone, then exit",
+    )
+    args = parser.parse_args(argv)
+    logging.basicConfig(
+        level=os.environ.get("REVOKER_LOG_LEVEL", "INFO").upper(),
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
+
+    def run(step: Callable[[], int]) -> bool:
+        try:
+            count = step()
+        except RevokerError as e:
+            logger.error("%s", e)
+            return False
+        except Exception as e:
+            # Database errors can carry SQL parameters (emails), so only the
+            # error's type is logged
+            logger.error("failed: %s", type(e).__name__)
+            return False
+        # A poll that found nothing is the usual case; keep it out of INFO
+        level = logging.INFO if count or step.__name__ == "reconcile" else logging.DEBUG
+        logger.log(level, "%s done: %d", step.__name__, count)
+        return True
+
+    try:
+        config = Config.from_env(os.environ)
+    except RevokerError as e:
+        logger.error("%s", e)
+        return 2
+    revoker = Revoker(config)
+    if args.reconcile:
+        return 0 if run(revoker.reconcile) else 1
+    if args.once:
+        return 0 if run(revoker.poll_once) else 1
+    while True:
+        run(revoker.poll_once)
+        time.sleep(config.interval)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

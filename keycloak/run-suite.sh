@@ -10,6 +10,8 @@
 #   (b) cargo fmt --check; clippy of the OIDC build; make clippy_mysql (upstream CI)
 #   (c) every Rust test in the workspace for the OIDC build, against MySQL
 #   (d) tools/integration_tests (with tokenserver/) against syncserver in OIDC mode
+#   (e) tools/tokenserver (the tokenserver utility scripts' own tests), against the
+#       tokenserver database
 # (c) runs before (d) because test_storage.py leaves collections behind that break
 # syncstorage-mysql's static_collection_id test. Exits non-zero if any step fails.
 # Secrets are read from the files start-services.sh wrote and masked in all output.
@@ -60,6 +62,21 @@ poetry_install() {
         python3 -m venv /tmp/poetry && /tmp/poetry/bin/pip install -q "poetry==$POETRY_VERSION" || return 1
     fi
     /tmp/poetry/bin/poetry -C tools/integration_tests install --no-interaction --no-root
+}
+
+# tools/tokenserver is its own poetry project; installed as upstream's Makefile
+# (run_token_server_integration_tests) does
+tokenserver_poetry_install() {
+    /tmp/poetry/bin/poetry -C tools/tokenserver install --no-interaction --no-root --without dev
+}
+
+# As upstream's e2e compose files run them (PYTHONPATH, this directory as a pytest
+# argument). tools/tokenserver/pytest.ini's addopts (-m 'not migration_records')
+# deselects five tests there; -o addopts= keeps them, as they run on MySQL too.
+tokenserver_tests() {
+    PYTHONPATH="$REPO" /tmp/poetry/bin/poetry -C tools/tokenserver run \
+        pytest "$REPO/tools/tokenserver" -o addopts= \
+        -p no:cacheprovider -rs --durations=5
 }
 
 integration_tests() {
@@ -134,6 +151,8 @@ main() {
     step "(c) cargo test" cargo_test
     step "(d) poetry install" poetry_install
     step "(d) integration tests" integration_tests
+    step "(e) tokenserver poetry install" tokenserver_poetry_install
+    step "(e) tokenserver tests" tokenserver_tests
 
     echo "=== summary"
     printf '%s\n' "${summary[@]}"

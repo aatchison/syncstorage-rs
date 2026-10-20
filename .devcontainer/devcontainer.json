@@ -2,9 +2,9 @@
 // README at: https://github.com/devcontainers/templates/tree/main/src/rust
 {
 	"name": "Rust",
-	// Trixie, to match upstream's build image (Dockerfile: Rust 1.98.1 on Debian trixie).
-	// The earlier 1-1-bullseye image is past Debian 11 LTS.
-	"image": "mcr.microsoft.com/devcontainers/rust:1-trixie",
+	// Trixie with Rust 1.98.1 and upstream's build packages (see Dockerfile), to match
+	// upstream's build image and CI toolchain. The earlier 1-1-bullseye image is past Debian 11 LTS.
+	"build": { "dockerfile": "Dockerfile" },
 	"features": {
 		"ghcr.io/devcontainers/features/docker-in-docker:2": {
 			"moby": true,
@@ -26,11 +26,9 @@
 		}
 	},
 
-	// Build dependencies (the set upstream's Dockerfile installs) and every crate in
-	// Cargo.lock, so later builds and tests need no network. The image's Rust (1.99) already
-	// meets rust-version in Cargo.toml (1.98.1). The named cargo volume is gone: it masked /usr/local/cargo and kept
-	// stale toolchains across image updates.
-	"postCreateCommand": "sudo apt-get update && sudo apt-get install -y --no-install-recommends default-libmysqlclient-dev libpq-dev cmake pkg-config libssl-dev python3-dev clang && cargo fetch --locked"
+	// Every crate in Cargo.lock, so later builds and tests need no network. The named cargo
+	// volume is gone: it masked /usr/local/cargo and kept stale toolchains across image updates.
+	"postCreateCommand": "cargo fetch --locked"
 
 	// Use 'forwardPorts' to make a list of ports inside the container available locally.
 	// "forwardPorts": [],

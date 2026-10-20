@@ -5,9 +5,9 @@
 
 For each way of cutting a user off, with an online and an offline_access
 session: after the Keycloak admin action and one revoker run, the session's
-refresh token no longer works and Keycloak reports its tokens inactive. For a
-deleted user, the Tokenserver record is retired and the user's unexpired access
-token is refused.
+refresh token no longer works, Keycloak reports its tokens inactive and no
+offline session is left. For a deleted user, the Tokenserver record is retired
+and the user's unexpired access token is refused.
 """
 
 import secrets
@@ -21,6 +21,7 @@ from .helpers import (
     exchange,
     introspect,
     login,
+    offline_sessions,
     refresh,
     run_revoker,
     user_rows,
@@ -62,13 +63,17 @@ ACTIONS = {
     "disable": disable,
     "delete": delete,
 }
-# Where Keycloak on its own leaves the session usable (what the revoker is for)
+# Where Keycloak on its own leaves the session usable (what the revoker is for).
+# Not sign-out with an offline session: the sign-out sets the user's notBefore
+# (whole seconds), so Keycloak refuses an offline token issued in an earlier
+# second as stale, and accepts one issued in the same second. Which of the two
+# happens depends on timing; the offline session itself stays either way, and
+# the test checks that the revoker removes it.
 KEYCLOAK_LEAVES_ALIVE = {
     ("reset-password", False),
     ("reset-password", True),
     ("update-password", False),
     ("update-password", True),
-    ("sign-out", True),
 }
 
 
@@ -96,7 +101,7 @@ def assert_retired(db, user_id, access_token):
 
 @pytest.mark.parametrize("offline", [False, True], ids=["online", "offline"])
 @pytest.mark.parametrize("action", list(ACTIONS))
-def test_revocation(admin, db, revoker, action, offline):
+def test_revocation(admin, db, revoker, live_client, action, offline):
     """After the action and one revoker run, the session is dead."""
     name, password, user_id = new_user(admin, action)
     tokens = login(admin, name, password, offline)
@@ -105,11 +110,16 @@ def test_revocation(admin, db, revoker, action, offline):
     assert res.status_code == 200, res.text
     assert introspect(admin, access_token)
     assert_active_record(db, user_id)
+    if offline:
+        assert len(offline_sessions(admin, user_id, live_client)) == 1
 
     res = ACTIONS[action](admin, user_id)
     assert res.status_code == 204, res.text
     if (action, offline) in KEYCLOAK_LEAVES_ALIVE:
         assert refresh(admin, refresh_token).status_code == 200
+    if offline and action != "delete":
+        # Keycloak leaves the offline session in place
+        assert len(offline_sessions(admin, user_id, live_client)) == 1
     if action == "delete":
         # Not retired yet, so Tokenserver still takes the token
         assert exchange(access_token).status_code == 200
@@ -125,6 +135,7 @@ def test_revocation(admin, db, revoker, action, offline):
         assert_retired(db, user_id, access_token)
     else:
         assert_active_record(db, user_id)
+        assert offline_sessions(admin, user_id, live_client) == []
 
 
 def test_reconcile_retires_user_deleted_while_revoker_was_down(

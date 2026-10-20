@@ -115,6 +115,23 @@ def create_user(admin: KeycloakAdmin, name: str, password: str) -> str:
     return user_id
 
 
+def client_uuid(admin: KeycloakAdmin, client_id: str) -> str:
+    """Return the internal ID of a client of the realm."""
+    res = admin("GET", "/clients", params={"clientId": client_id})
+    assert res.status_code == 200, res.status_code
+    (client,) = [c for c in res.json() if c["clientId"] == client_id]
+    uuid: str = client["id"]
+    return uuid
+
+
+def offline_sessions(admin: KeycloakAdmin, user_id: str, client: str) -> list:
+    """Return the user's offline sessions of a client (by its internal ID)."""
+    res = admin("GET", f"/users/{user_id}/offline-sessions/{client}")
+    assert res.status_code == 200, res.status_code
+    sessions: list = res.json()
+    return sessions
+
+
 def token_endpoint(admin: KeycloakAdmin) -> str:
     """Return the realm's token endpoint."""
     return f"{admin.issuer}/protocol/openid-connect/token"

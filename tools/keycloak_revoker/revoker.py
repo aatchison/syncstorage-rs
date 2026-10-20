@@ -14,7 +14,8 @@ database:
       their offline sessions of each configured client
       (DELETE users/<id>/consents/<client>)
   admin sign-out (ACTION users/<id>/logout)
-      revoke the offline sessions, which Keycloak's sign-out leaves alive
+      revoke the offline sessions, which Keycloak's sign-out leaves in place
+      (it makes their tokens stale, except those issued in the same second)
   user deleted (admin DELETE users/<id>, user event DELETE_ACCOUNT)
       retire the Tokenserver user "<id>@<FXA_EMAIL_DOMAIN>"
 

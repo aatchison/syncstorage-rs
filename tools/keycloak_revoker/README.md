@@ -14,7 +14,7 @@ Keycloak has no webhook, so the revoker polls the realm's stored events
 | User event `UPDATE_PASSWORD`, or `UPDATE_CREDENTIAL` with `details.credential_type` `password` (the user changed their password) | `POST /users/{id}/logout`, then `DELETE /users/{id}/consents/{client}` for each Thunderbird client, which revokes the offline sessions too. Done whether or not the user ticked "Sign out from other devices" |
 | Admin event `ACTION users/{id}/reset-password` | The same |
 | Admin event `UPDATE users/{id}` (`PUT /users/{id}`: an admin or a script set a password through its `credentials` array, disabled the user, or edited their profile) | The same. The event doesn't say whether a password was set, so every update counts as one; see below |
-| Admin event `ACTION users/{id}/logout` | `DELETE /users/{id}/consents/{client}` for each Thunderbird client: Keycloak's sign-out leaves offline sessions alive |
+| Admin event `ACTION users/{id}/logout` | `DELETE /users/{id}/consents/{client}` for each Thunderbird client. Keycloak's sign-out ends the online sessions and sets the user's `notBefore` to the current second, which makes older refresh and offline tokens stale; but it leaves the offline sessions in place, and an offline token issued in the same second as the sign-out still works. Deleting the offline sessions closes that window |
 | Admin event `DELETE users/{id}`, user event `DELETE_ACCOUNT` | Retires the Tokenserver user `{id}@{SYNC_TOKENSERVER__FXA_EMAIL_DOMAIN}`, with `retire_user` from `tools/tokenserver/database.py` |
 | Every other event | Nothing |
 

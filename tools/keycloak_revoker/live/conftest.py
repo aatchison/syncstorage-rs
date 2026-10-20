@@ -24,6 +24,7 @@ from .helpers import (
     NODE_URL,
     Database,
     KeycloakAdmin,
+    client_uuid,
     run_revoker,
 )
 
@@ -51,6 +52,12 @@ def admin():
     if res.status_code != 409:
         res.raise_for_status()
     return admin
+
+
+@pytest.fixture(scope="session")
+def live_client(admin):
+    """Return the internal ID of the Thunderbird stand-in client."""
+    return client_uuid(admin, LIVE_CLIENT_ID)
 
 
 @pytest.fixture(scope="session")

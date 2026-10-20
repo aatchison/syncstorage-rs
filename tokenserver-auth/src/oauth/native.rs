@@ -289,16 +289,24 @@ where
             .map(Cow::Borrowed)
             .collect::<Vec<_>>();
         if self.jwk_verifiers.is_empty() {
-            verifiers = self
-                .get_remote_jwks()
-                .await
-                .unwrap_or_else(|e| {
+            verifiers = match self.get_remote_jwks().await {
+                Ok(keys) => keys,
+                Err(e) => {
                     slog_scope::warn!("Error requesting remote jwks: {}", e);
+                    if self.oidc.is_some() {
+                        // With no remote verify to fall back to, the token can't be checked:
+                        // the provider is unavailable, not the credentials invalid
+                        return Err(TokenserverError {
+                            context: e.context,
+                            ..TokenserverError::resource_unavailable()
+                        });
+                    }
                     vec![]
-                })
-                .into_iter()
-                .map(Cow::Owned)
-                .collect();
+                }
+            }
+            .into_iter()
+            .map(Cow::Owned)
+            .collect();
         }
 
         if let Some(expected) = &self.oidc {
@@ -349,6 +357,7 @@ fn internal_err_with_ctx<E: std::fmt::Display>(err: E) -> TokenserverError {
 #[cfg(test)]
 mod tests {
     use crate::crypto::{JWTVerifierImpl, JWTVerifyError};
+    use crate::test_utils::test_jwk;
     use serde_json::json;
 
     use super::*;
@@ -783,6 +792,57 @@ mod tests {
         assert_eq!(err.status, "invalid-credentials");
         assert_eq!(err.http_status, 401);
         assert_eq!(err.description, "Unauthorized");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_oidc_jwks_fetch_failure_is_unavailable() -> Result<(), TokenserverError> {
+        let mut server = mockito::Server::new_async().await;
+        let issuer = format!("{}/realms/sync", server.url());
+        let certs_path = "/realms/sync/protocol/openid-connect/certs";
+
+        // The JWKS endpoint fails, or nothing listens at the issuer
+        let mock_jwks = server
+            .mock("GET", certs_path)
+            .with_status(500)
+            .expect(1)
+            .create_async()
+            .await;
+        for issuer in [issuer.as_str(), OIDC_ISSUER] {
+            let settings = Settings {
+                oidc_issuer_url: Some(issuer.to_owned()),
+                ..oidc_settings()
+            };
+            let verifier: Verifier<JWTVerifierImpl> = Verifier::new(&settings, vec![])?;
+            let err = verifier
+                .verify("a token".to_string(), &Default::default())
+                .await
+                .unwrap_err();
+            assert_eq!(err.http_status, 503);
+            assert_eq!(err.description, "Resource is not available");
+        }
+        mock_jwks.assert_async().await;
+
+        // Keys that were fetched but don't verify the token still mean bad credentials
+        let mock_jwks = server
+            .mock("GET", certs_path)
+            .with_header("content-type", "application/json")
+            .with_body(json!({ "keys": [test_jwk()] }).to_string())
+            .expect(1)
+            .create_async()
+            .await;
+        let settings = Settings {
+            oidc_issuer_url: Some(issuer),
+            ..oidc_settings()
+        };
+        let verifier: Verifier<JWTVerifierImpl> = Verifier::new(&settings, vec![])?;
+        let err = verifier
+            .verify("a token".to_string(), &Default::default())
+            .await
+            .unwrap_err();
+        assert_eq!(err.status, "invalid-credentials");
+        assert_eq!(err.http_status, 401);
+        mock_jwks.assert_async().await;
         Ok(())
     }
 

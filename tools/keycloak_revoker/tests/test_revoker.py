@@ -241,9 +241,14 @@ class Harness:
         return event
 
     def start(self):
-        """First poll: starts the cursor at the current time."""
+        """First poll: starts the cursor at the current time minus the overlap.
+
+        Then moves the clock on an hour, so that the events the test adds next
+        (at NOW_MS plus a few seconds) are in the past at the next poll.
+        """
         assert self.revoker.poll_once() == 0
         self.keycloak.requests.clear()
+        self.clock.now_ms = NOW_MS + 3_600_000
 
 
 def revoke_all(user):
@@ -476,10 +481,12 @@ def test_event_queries(tmp_path):
     queries = {
         p.removeprefix(ADMIN): q for m, p, q in h.keycloak.requests if m == "GET"
     }
-    # The cursor's floor is the first start, so nothing older is asked for
+    # The cursor's floor is the first start minus the overlap, so nothing older
+    # is asked for
+    floor = str(NOW_MS - h.config.overlap * 1000)
     assert queries["/events"] == {
         "type": ["UPDATE_CREDENTIAL", "UPDATE_PASSWORD", "DELETE_ACCOUNT"],
-        "dateFrom": [str(NOW_MS)],
+        "dateFrom": [floor],
         "direction": ["asc"],
         "first": ["0"],
         "max": ["100"],
@@ -487,7 +494,7 @@ def test_event_queries(tmp_path):
     assert queries["/admin-events"] == {
         "resourceTypes": ["USER"],
         "operationTypes": ["ACTION", "DELETE", "UPDATE"],
-        "dateFrom": [str(NOW_MS)],
+        "dateFrom": [floor],
         "direction": ["asc"],
         "first": ["0"],
         "max": ["100"],
@@ -519,15 +526,22 @@ def test_events_are_paged(tmp_path):
 # ── cursor and idempotency ───────────────────────────────────────────────────
 
 
-def test_first_run_starts_from_now(tmp_path):
+def test_first_run_starts_from_now_minus_the_overlap(tmp_path):
     h = Harness(tmp_path)
-    # Events from before the revoker ever ran are not acted on
-    h.user_event("UPDATE_PASSWORD", "alice", offset_ms=-1)
-    h.admin_event("DELETE", "users/carol", offset_ms=-30_000)
-    assert h.revoker.poll_once() == 0
-    assert h.keycloak.calls() == []
-    assert h.db.retired == []
-    assert h.cursor() == {"time": NOW_MS, "floor": NOW_MS, "seen": {}}
+    # Events older than the overlap, from before the revoker ever ran, are not
+    # acted on
+    h.user_event("UPDATE_PASSWORD", "alice", offset_ms=-61_000)
+    h.admin_event("DELETE", "users/carol", offset_ms=-60_001)
+    # Events within it are: Keycloak's clock may run behind the revoker's
+    h.user_event("UPDATE_PASSWORD", "bob", offset_ms=-30_000)
+    h.admin_event("DELETE", "users/dave", offset_ms=-1)
+    assert h.revoker.poll_once() == 2
+    assert h.keycloak.calls() == revoke_all("bob")
+    assert h.db.retired == [f"dave@{EMAIL_DOMAIN}"]
+    floor = NOW_MS - 60_000
+    assert h.cursor()["floor"] == floor
+    # Not past the revoker's clock minus the margin
+    assert h.cursor()["time"] == NOW_MS - 1000
 
 
 def test_cursor_is_persisted_and_events_are_handled_once(tmp_path):
@@ -562,6 +576,26 @@ def test_events_with_the_same_time_are_each_handled_once(tmp_path):
     h.keycloak.requests.clear()
     assert h.revoker.poll_once() == 1
     assert h.keycloak.calls() == revoke_offline("bob")
+
+
+def test_cursor_never_passes_the_revoker_clock(tmp_path):
+    h = Harness(tmp_path)
+    h.start()
+    now = h.clock.now_ms
+    # From a Keycloak node whose clock runs 5 minutes ahead
+    ahead = h.user_event("UPDATE_PASSWORD", "alice", offset_ms=now - NOW_MS + 300_000)
+    assert h.revoker.poll_once() == 1
+    assert h.cursor()["time"] == now - 1000
+    assert f"user:{ahead['id']}" in h.cursor()["seen"]
+    # A correctly timed node stores an event a second after that poll; the
+    # next poll, 15 s later, still finds it
+    h.admin_event("ACTION", "users/bob/reset-password", offset_ms=now - NOW_MS + 1000)
+    h.clock.now_ms += 15_000
+    h.keycloak.requests.clear()
+    assert h.revoker.poll_once() == 1
+    # ...and doesn't handle the node's early event again
+    assert h.keycloak.calls() == revoke_all("bob")
+    assert h.cursor()["time"] == now + 1000
 
 
 def test_late_events_within_the_overlap_are_handled(tmp_path):

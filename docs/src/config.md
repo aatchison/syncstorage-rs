@@ -185,6 +185,8 @@ Revocation never involves FxA. A user is cut off by revoking their sessions in K
 
 For a password change the revoker signs the user out of every session and then revokes their offline sessions of the Thunderbird clients. So whether or not Thunderbird is allowed `offline_access`, its sessions are covered by the revoker. Its `--reconcile` mode retires Tokenserver users whose Keycloak user no longer exists, for deletions whose events were missed. Tokenserver refuses a retired user's access token with 401 `invalid-generation` (when, as in this contract, the token carries no generation), so a deleted user's unexpired access token stops working as soon as the revoker has retired them.
 
+The revoker relies on event times: run NTP on the Keycloak nodes and the revoker's host, and keep its `REVOKER_OVERLAP` (60 s by default) well above the worst clock skew between them.
+
 Nothing is pushed to Tokenserver or the storage nodes. A client cut off this way keeps the access token and Sync token it already holds until they expire. The worst-case time from the event to losing access is:
 
 ```text

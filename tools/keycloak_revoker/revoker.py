@@ -79,6 +79,8 @@ USER_NOT_FOUND = "User not found"
 # offline session for the client (nothing to revoke), or no such client exists
 CONSENT_NOT_FOUND = "Consent nor offline token not found"
 CLIENT_NOT_FOUND = "Client not found"
+# The cursor never moves past the revoker's own clock minus this
+CLOCK_MARGIN_MS = 1000
 # --reconcile retires at most this share of the active users without --force
 RECONCILE_MAX_SHARE = 0.1
 
@@ -452,10 +454,12 @@ class Keycloak:
 class Cursor:
     """Where the event polling has got to, persisted as JSON.
 
-    `time` is the time of the newest event handled. Each poll asks for events
-    from `time - overlap`, so an event that Keycloak stored late still turns
-    up; `seen` holds the keys of the events handled in that window, so none is
-    handled twice. `floor` is when the revoker first started: older events are
+    `time` is the time of the newest event handled, but never later than the
+    revoker's own clock (minus CLOCK_MARGIN_MS) at the poll. Each poll asks
+    for events from `time - overlap`, so an event that Keycloak stored late, or
+    stamped with a clock that runs behind, still turns up; `seen` holds the
+    keys of the events handled in that window, so none is handled twice.
+    `floor` is the revoker's first start minus the overlap: older events are
     never handled.
     """
 
@@ -465,15 +469,15 @@ class Cursor:
     seen: dict[str, int]
 
     @classmethod
-    def load(cls, path: str, now_ms: int) -> "Cursor":
-        """Load the cursor, or start one at `now_ms` if there is none."""
+    def load(cls, path: str, start_ms: int) -> "Cursor":
+        """Load the cursor, or start one at `start_ms` if there is none."""
         try:
             with open(path) as f:
                 data = json.load(f)
         except FileNotFoundError:
-            cursor = cls(path, now_ms, now_ms, {})
+            cursor = cls(path, start_ms, start_ms, {})
             cursor.save()
-            logger.info("no cursor file; starting from now")
+            logger.info("no cursor file; starting from now minus REVOKER_OVERLAP")
             return cursor
         except (OSError, ValueError) as e:
             raise RevokerError(f"can't read the cursor file: {e}") from None
@@ -551,8 +555,11 @@ class Revoker:
         """
         if not self._checked:
             self.check()
-        cursor = Cursor.load(self.config.cursor_file, int(self.clock() * 1000))
+        now_ms = int(self.clock() * 1000)
         overlap_ms = self.config.overlap * 1000
+        # A first start looks back by the overlap too, in case the revoker's
+        # clock runs ahead of Keycloak's
+        cursor = Cursor.load(self.config.cursor_file, now_ms - overlap_ms)
         since = max(cursor.time - overlap_ms, cursor.floor)
         events = [("user", e) for e in self.keycloak.user_events(since)]
         events += [("admin", e) for e in self.keycloak.admin_events(since)]
@@ -576,8 +583,11 @@ class Revoker:
             seen[key] = event_time
             newest = max(newest, event_time)
 
-        cursor.time = newest
-        cursor.seen = {k: t for k, t in seen.items() if t >= newest - overlap_ms}
+        # An event stamped by a Keycloak node whose clock runs ahead must not
+        # carry the next poll's window past the events the other nodes have
+        # yet to store
+        cursor.time = min(newest, now_ms - CLOCK_MARGIN_MS)
+        cursor.seen = {k: t for k, t in seen.items() if t >= cursor.time - overlap_ms}
         cursor.save()
         return acted
 

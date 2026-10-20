@@ -11,6 +11,7 @@ token is refused.
 """
 
 import secrets
+import time
 
 import pytest
 
@@ -135,8 +136,14 @@ def test_reconcile_retires_user_deleted_while_revoker_was_down(
     assert exchange(access_token).status_code == 200
     assert delete(admin, user_id).status_code == 204
 
-    # A revoker that starts after the deletion (a new cursor) never sees it
-    env = {**revoker_env, "REVOKER_CURSOR_FILE": str(tmp_path / "cursor")}
+    # A revoker that starts after the deletion (a new cursor) never sees it, if
+    # it starts more than its overlap later: a first start looks back by it
+    time.sleep(2)
+    env = {
+        **revoker_env,
+        "REVOKER_CURSOR_FILE": str(tmp_path / "cursor"),
+        "REVOKER_OVERLAP": "1",
+    }
     run_revoker(env, "--once")
     run_revoker(env, "--once")
     assert_active_record(db, user_id)

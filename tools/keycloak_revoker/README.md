@@ -43,13 +43,20 @@ poll handles the same events again. Every action can safely be repeated.
 
 ## Cursor
 
-The cursor file records the time of the newest event handled. Each poll asks
-for events from that time minus `REVOKER_OVERLAP` seconds, so an event Keycloak
+The cursor file records the time of the newest event handled, but never later
+than the revoker's own clock (less a second) at that poll. Each poll asks for
+events from that time minus `REVOKER_OVERLAP` seconds, so an event Keycloak
 stored late is still seen; the IDs of the events handled in that window are kept
 in the file so that none is handled twice. When the file doesn't exist, the
-revoker starts from the current time: older events are never handled. The file
-is written only after every event of a poll has been handled. It holds event IDs
-and times, no user data.
+revoker starts from the current time minus `REVOKER_OVERLAP`: older events are
+never handled. The file is written only after every event of a poll has been
+handled. It holds event IDs and times, no user data.
+
+Keycloak stamps each event with the clock of the node that stored it, and sorts
+and filters events by that time only. Run NTP on every Keycloak node and on the
+revoker's host, and keep `REVOKER_OVERLAP` well above the worst clock difference
+between any two of them plus the time Keycloak takes to store an event: an
+event stamped more than `REVOKER_OVERLAP` before the cursor is never seen.
 
 ## Reconcile
 
@@ -85,7 +92,7 @@ All from environment variables.
 | `REVOKER_OFFLINE_CLIENTS` | `SYNC_TOKENSERVER__OIDC_ALLOWED_CLIENTS` | Comma-separated IDs of the clients Thunderbird signs in with, whose offline sessions are revoked |
 | `REVOKER_CURSOR_FILE` | (required) | The cursor file. Its directory must be writable |
 | `REVOKER_INTERVAL` | 15 | Seconds between polls |
-| `REVOKER_OVERLAP` | 60 | Seconds each poll looks back before the cursor |
+| `REVOKER_OVERLAP` | 60 | Seconds each poll looks back before the cursor, and a first start before the current time. Must exceed the worst clock skew, see "Cursor" |
 | `REVOKER_TIMEOUT` | 10 | HTTP timeout in seconds |
 | `REVOKER_ATTEMPTS` | 4 | Attempts per Keycloak request on a 5xx or network error |
 | `REVOKER_RECONCILE_MAX` | 10 | The most users one `--reconcile` retires without `--force` |

@@ -7,8 +7,8 @@ Keycloak has no webhook, so this polls the realm's stored user events and admin
 events and acts on them through the Keycloak admin API and the Tokenserver
 database:
 
-  password change (user events UPDATE_CREDENTIAL / UPDATE_PASSWORD, admin
-  ACTION users/<id>/reset-password)
+  password change (user events UPDATE_PASSWORD, UPDATE_CREDENTIAL of a password,
+  admin ACTION users/<id>/reset-password)
       sign the user out of every session (POST users/<id>/logout), then revoke
       their offline sessions of each configured client
       (DELETE users/<id>/consents/<client>)
@@ -64,6 +64,8 @@ REVOKE_ALL = "revoke-all-sessions"
 REVOKE_OFFLINE = "revoke-offline-sessions"
 RETIRE = "retire-tokenserver-user"
 
+# UPDATE_CREDENTIAL counts only for a password: Keycloak also emits it when an
+# OTP or WebAuthn credential is set up. A password change emits both events.
 PASSWORD_USER_EVENTS = ("UPDATE_CREDENTIAL", "UPDATE_PASSWORD")
 DELETE_USER_EVENTS = ("DELETE_ACCOUNT",)
 # users/<id>, users/<id>/reset-password or users/<id>/logout, nothing deeper
@@ -107,7 +109,11 @@ def user_event_action(event: Mapping[str, Any]) -> Optional[Action]:
     user_id = event.get("userId")
     if not user_id or event.get("error"):
         return None
-    if event.get("type") in PASSWORD_USER_EVENTS:
+    details = event.get("details") or {}
+    if event.get("type") == "UPDATE_PASSWORD" or (
+        event.get("type") == "UPDATE_CREDENTIAL"
+        and details.get("credential_type") == "password"
+    ):
         # Whether or not the user ticked "Sign out from other devices"
         return Action(REVOKE_ALL, user_id)
     if event.get("type") in DELETE_USER_EVENTS:

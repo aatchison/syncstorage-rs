@@ -262,7 +262,34 @@ def revoke_offline(user):
 @pytest.mark.parametrize(
     "event,expected",
     [
-        ({"type": "UPDATE_CREDENTIAL", "userId": "u1"}, Action(REVOKE_ALL, "u1")),
+        (
+            {
+                "type": "UPDATE_CREDENTIAL",
+                "userId": "u1",
+                "details": {"credential_type": "password"},
+            },
+            Action(REVOKE_ALL, "u1"),
+        ),
+        # Setting up OTP or WebAuthn emits UPDATE_CREDENTIAL too: not a password
+        # change, so the user's sessions are left alone
+        (
+            {
+                "type": "UPDATE_CREDENTIAL",
+                "userId": "u1",
+                "details": {"credential_type": "otp"},
+            },
+            None,
+        ),
+        (
+            {
+                "type": "UPDATE_CREDENTIAL",
+                "userId": "u1",
+                "details": {"credential_type": "webauthn"},
+            },
+            None,
+        ),
+        ({"type": "UPDATE_CREDENTIAL", "userId": "u1"}, None),
+        ({"type": "UPDATE_CREDENTIAL", "userId": "u1", "details": None}, None),
         ({"type": "UPDATE_PASSWORD", "userId": "u1"}, Action(REVOKE_ALL, "u1")),
         # Revoked whether or not the user ticked "Sign out from other devices"
         (
@@ -327,15 +354,31 @@ def test_admin_event_with_error_is_ignored():
 # ── what each event does, end to end ─────────────────────────────────────────
 
 
-@pytest.mark.parametrize("type_", ["UPDATE_CREDENTIAL", "UPDATE_PASSWORD"])
-def test_user_password_change_revokes_all_sessions(tmp_path, type_):
+@pytest.mark.parametrize(
+    "type_,details",
+    [
+        ("UPDATE_CREDENTIAL", {"credential_type": "password"}),
+        ("UPDATE_PASSWORD", {"credential_type": "password"}),
+        ("UPDATE_PASSWORD", None),
+    ],
+)
+def test_user_password_change_revokes_all_sessions(tmp_path, type_, details):
     h = Harness(tmp_path)
     h.start()
-    h.user_event(type_, "alice")
+    h.user_event(type_, "alice", details=details)
     assert h.revoker.poll_once() == 1
     assert h.keycloak.calls() == revoke_all("alice")
     assert not {c for c in h.keycloak.consents if c[0] == "alice"}
     assert h.db.retired == []
+
+
+def test_otp_setup_leaves_sessions_alone(tmp_path):
+    h = Harness(tmp_path)
+    h.start()
+    h.user_event("UPDATE_CREDENTIAL", "alice", details={"credential_type": "otp"})
+    assert h.revoker.poll_once() == 0
+    assert h.keycloak.calls() == []
+    assert len([c for c in h.keycloak.consents if c[0] == "alice"]) == 2
 
 
 def test_admin_reset_password_revokes_all_sessions(tmp_path):

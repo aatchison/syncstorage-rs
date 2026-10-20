@@ -4,7 +4,7 @@ pub use crate::crypto::JWTVerifier;
 use crate::crypto::JWTVerifyError;
 use async_trait::async_trait;
 use reqwest::Url;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::{borrow::Cow, time::Duration};
 use syncserver_common::Metrics;
 use tokenserver_common::TokenserverError;
@@ -18,40 +18,53 @@ struct TokenClaims {
     user: String,
     scope: String,
     #[serde(rename = "fxa-generation")]
-    fxa_generation: Option<i64>,
-    /// The OIDC "issued at" claim. Only used as the generation for OIDC providers.
-    #[serde(rename = "iat")]
-    issued_at: Option<i64>,
-    /// A plain "generation" claim, kept for compatibility with test tokens.
-    #[serde(default)]
-    generation: Option<u64>,
+    generation: Option<i64>,
 }
 
 impl TokenClaims {
-    /// Returns the generation, preferring the FxA-specific claim. For OIDC providers, which
-    /// have no generation concept, the "iat" claim is used next. FxA tokens never use "iat",
-    /// since it is in seconds while FxA generations are in milliseconds.
-    fn get_generation(&self, oidc: bool) -> Option<i64> {
-        self.fxa_generation
-            .or(if oidc { self.issued_at } else { None })
-            .or(self.generation.map(|g| g as i64))
-    }
-
-    fn validate(self, oidc: bool) -> Result<VerifyOutput, TokenserverError> {
-        // FxA uses comma-separated scopes; OIDC providers use space-separated scopes.
-        let has_sync_scope = self
-            .scope
-            .split([',', ' '])
-            .any(|scope| scope.trim() == SYNC_SCOPE);
-        if !has_sync_scope {
+    fn validate(self) -> Result<VerifyOutput, TokenserverError> {
+        if !self.scope.split(',').any(|scope| scope == SYNC_SCOPE) {
             return Err(TokenserverError::invalid_credentials(
                 "Unauthorized".to_string(),
             ));
         }
-        let generation = self.get_generation(oidc);
+        Ok(self.into())
+    }
+}
+
+impl From<TokenClaims> for VerifyOutput {
+    fn from(value: TokenClaims) -> Self {
+        Self {
+            fxa_uid: value.user,
+            generation: value.generation,
+        }
+    }
+}
+
+/// The claims of an access token from an OIDC provider (`oauth_provider` "oidc").
+#[derive(Serialize, Deserialize, Debug)]
+struct OidcTokenClaims {
+    #[serde(rename = "sub")]
+    user: String,
+    /// Space-separated, unlike FxA's comma-separated scopes
+    scope: String,
+    /// OIDC providers have no FxA generation, but a provider can send one in the same claim
+    /// as FxA (for example Keycloak with a user attribute mapper). It is never derived from
+    /// other claims such as `iat`.
+    #[serde(rename = "fxa-generation")]
+    generation: Option<i64>,
+}
+
+impl OidcTokenClaims {
+    fn validate(self) -> Result<VerifyOutput, TokenserverError> {
+        if !self.scope.split(' ').any(|scope| scope == SYNC_SCOPE) {
+            return Err(TokenserverError::invalid_credentials(
+                "Unauthorized".to_string(),
+            ));
+        }
         Ok(VerifyOutput {
             fxa_uid: self.user,
-            generation,
+            generation: self.generation,
         })
     }
 }
@@ -63,7 +76,7 @@ pub struct Verifier<J> {
     jwks_url: Url,
     jwk_verifiers: Vec<J>,
     http_client: reqwest::Client,
-    /// True when `oauth_provider` is "oidc".
+    /// True when `oauth_provider` is "oidc"
     oidc: bool,
 }
 
@@ -74,27 +87,18 @@ where
     pub fn new(settings: &Settings, jwk_verifiers: Vec<J>) -> Result<Self, TokenserverError> {
         let oidc = settings.oauth_provider == OAuthProvider::Oidc;
         let (verify_url, jwks_url) = if oidc {
-            // For OIDC providers like Keycloak
             let issuer = settings.oidc_issuer_url.as_ref().ok_or_else(|| {
                 internal_err_with_ctx("oauth_provider is \"oidc\" but oidc_issuer_url is not set")
             })?;
             // Make sure the issuer path ends in "/" so that `join` appends to it instead of
             // replacing its last segment (e.g. ".../realms/sync").
-            let issuer = if issuer.ends_with('/') {
-                issuer.to_owned()
-            } else {
-                format!("{}/", issuer)
-            };
-            let base_url = Url::parse(&issuer).map_err(|_| TokenserverError::internal_error())?;
-
-            // OIDC has no verify endpoint; only local JWT verification is used, so this URL
-            // is a placeholder that is never requested.
-            let verify_url = base_url.clone();
+            let base_url = Url::parse(&format!("{}/", issuer.trim_end_matches('/')))
+                .map_err(internal_err_with_ctx)?;
             let jwks_url = base_url
                 .join("protocol/openid-connect/certs")
-                .map_err(|_| TokenserverError::internal_error())?;
-
-            (verify_url, jwks_url)
+                .map_err(internal_err_with_ctx)?;
+            // OIDC providers have no verify endpoint, so this URL is never requested
+            (base_url, jwks_url)
         } else {
             let base_url = Url::parse(&settings.fxa_oauth_server_url)
                 .map_err(|_| TokenserverError::internal_error())?;
@@ -104,7 +108,6 @@ where
             let jwks_url = base_url
                 .join("v1/jwks")
                 .map_err(|_| TokenserverError::internal_error())?;
-
             (verify_url, jwks_url)
         };
         let http_client = reqwest::Client::builder()
@@ -140,9 +143,7 @@ where
                 Self {
                     user: value.user,
                     scope: value.scope.join(","),
-                    fxa_generation: value.generation,
-                    issued_at: None,
-                    generation: None,
+                    generation: value.generation,
                 }
             }
         }
@@ -189,11 +190,11 @@ where
             .collect()
     }
 
-    fn verify_jwt_locally(
+    fn verify_jwt_locally<T: DeserializeOwned>(
         &self,
         verifiers: &[Cow<'_, J>],
         token: &str,
-    ) -> Result<TokenClaims, JWTVerifyError> {
+    ) -> Result<T, JWTVerifyError> {
         if verifiers.is_empty() {
             return Err(JWTVerifyError::InvalidKey);
         }
@@ -201,7 +202,7 @@ where
         verifiers
             .iter()
             .find_map(|verifier| {
-                match verifier.verify::<TokenClaims>(token) {
+                match verifier.verify::<T>(token) {
                     // If it's an invalid signature, it means our key was well formatted,
                     // but the signature was incorrect. Lets try another key if we have any
                     Err(JWTVerifyError::InvalidSignature) => None,
@@ -258,6 +259,19 @@ where
                 .collect();
         }
 
+        if self.oidc {
+            // OIDC providers have no remote verify endpoint to fall back to
+            return self
+                .verify_jwt_locally::<OidcTokenClaims>(&verifiers, &token)
+                .map_err(|e| {
+                    if e.is_reportable_err() {
+                        metrics.incr(e.metric_label())
+                    }
+                    unauthorized_err_with_ctx(e)
+                })?
+                .validate();
+        }
+
         let claims = match self.verify_jwt_locally(&verifiers, &token) {
             Ok(res) => res,
             Err(e) => {
@@ -266,17 +280,13 @@ where
                 }
                 match e {
                     JWTVerifyError::DecodingError | JWTVerifyError::InvalidKey => {
-                        // OIDC providers have no remote verify endpoint to fall back to
-                        if self.oidc {
-                            return Err(unauthorized_err_with_ctx(e));
-                        }
                         self.remote_verify_token(&token).await?
                     }
                     e => return Err(unauthorized_err_with_ctx(e)),
                 }
             }
         };
-        claims.validate(self.oidc)
+        claims.validate()
     }
 }
 
@@ -429,9 +439,7 @@ mod tests {
         let token_claims = TokenClaims {
             user: "fxa_id".to_string(),
             scope: SYNC_SCOPE.to_string(),
-            fxa_generation: Some(124),
-            issued_at: None,
-            generation: None,
+            generation: Some(124),
         };
 
         let res = verifier
@@ -515,9 +523,7 @@ mod tests {
         let token_claims = TokenClaims {
             user: "fxa_id".to_string(),
             scope: "some other scope".to_string(),
-            fxa_generation: Some(124),
-            issued_at: None,
-            generation: None,
+            generation: Some(124),
         };
         mock_jwk_verifier!(token, Ok(serde_json::from_str(token).unwrap()));
         let jwk_verifiers = vec![MockJWTVerifier {}];
@@ -631,6 +637,22 @@ mod tests {
         }
     }
 
+    /// Verifies `claims` (serialized as the token) with an OIDC verifier whose mock JWT
+    /// verifier accepts any signature.
+    async fn verify_oidc_claims(
+        claims: serde_json::Value,
+    ) -> Result<VerifyOutput, TokenserverError> {
+        mock_jwk_verifier!(
+            token,
+            serde_json::from_str(token).map_err(|_| JWTVerifyError::DecodingError)
+        );
+        let verifier: Verifier<MockJWTVerifier> =
+            Verifier::new(&oidc_settings(), vec![MockJWTVerifier {}])?;
+        verifier
+            .verify(claims.to_string(), &Default::default())
+            .await
+    }
+
     #[test]
     fn test_oidc_jwks_url_keeps_realm_path() -> Result<(), TokenserverError> {
         mock_jwk_verifier!(Err(JWTVerifyError::InvalidSignature));
@@ -640,6 +662,16 @@ mod tests {
             "http://127.0.0.1:1/realms/sync/protocol/openid-connect/certs"
         );
         Ok(())
+    }
+
+    #[test]
+    fn test_oidc_requires_issuer() {
+        mock_jwk_verifier!(Err(JWTVerifyError::InvalidSignature));
+        let settings = Settings {
+            oidc_issuer_url: None,
+            ..oidc_settings()
+        };
+        assert!(Verifier::<MockJWTVerifier>::new(&settings, vec![]).is_err());
     }
 
     #[tokio::test]
@@ -661,53 +693,45 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_oidc_uses_iat_as_generation() -> Result<(), TokenserverError> {
-        let token_claims = TokenClaims {
-            user: "keycloak_user_id".to_string(),
-            scope: format!("openid {}", SYNC_SCOPE),
-            fxa_generation: None,
-            issued_at: Some(1_700_000_000),
-            generation: None,
-        };
-        mock_jwk_verifier!(token, Ok(serde_json::from_str(token).unwrap()));
-        let jwk_verifiers = vec![MockJWTVerifier {}];
-        let verifier: Verifier<MockJWTVerifier> = Verifier::new(&oidc_settings(), jwk_verifiers)?;
-        let res = verifier
-            .verify(
-                serde_json::to_string(&token_claims).unwrap(),
-                &Default::default(),
-            )
-            .await?;
+    async fn test_oidc_generation_comes_only_from_fxa_generation() -> Result<(), TokenserverError> {
+        let res = verify_oidc_claims(json!({
+            "sub": "keycloak_user_id",
+            "scope": format!("openid {SYNC_SCOPE}"),
+            "fxa-generation": 1234,
+            "iat": 1_700_000_000,
+        }))
+        .await?;
         assert_eq!(res.fxa_uid, "keycloak_user_id");
-        assert_eq!(res.generation, Some(1_700_000_000));
+        assert_eq!(res.generation, Some(1234));
+
+        // Without the claim there is no generation; `iat` and `generation` don't stand in
+        let res = verify_oidc_claims(json!({
+            "sub": "keycloak_user_id",
+            "scope": format!("openid {SYNC_SCOPE}"),
+            "iat": 1_700_000_000,
+            "generation": 1234,
+        }))
+        .await?;
+        assert_eq!(res.generation, None);
         Ok(())
     }
 
     #[tokio::test]
-    async fn test_fxa_ignores_iat_as_generation() -> Result<(), TokenserverError> {
-        let server = mockito::Server::new_async().await;
-        let token_claims = TokenClaims {
-            user: "fxa_id".to_string(),
-            scope: SYNC_SCOPE.to_string(),
-            fxa_generation: None,
-            issued_at: Some(1_700_000_000),
-            generation: None,
-        };
-        mock_jwk_verifier!(token, Ok(serde_json::from_str(token).unwrap()));
-        let jwk_verifiers = vec![MockJWTVerifier {}];
-        let settings = Settings {
-            fxa_oauth_server_url: server.url(),
-            ..Settings::default()
-        };
-        let verifier: Verifier<MockJWTVerifier> = Verifier::new(&settings, jwk_verifiers)?;
-        let res = verifier
-            .verify(
-                serde_json::to_string(&token_claims).unwrap(),
-                &Default::default(),
-            )
-            .await?;
-        assert_eq!(res.fxa_uid, "fxa_id");
-        assert_eq!(res.generation, None);
-        Ok(())
+    async fn test_oidc_requires_sync_scope() {
+        for scope in [
+            Some("openid email".to_owned()),
+            // OIDC scopes are space-separated
+            Some(format!("openid,{SYNC_SCOPE}")),
+            None,
+        ] {
+            let mut claims = json!({ "sub": "keycloak_user_id" });
+            if let Some(scope) = scope {
+                claims["scope"] = json!(scope);
+            }
+            let err = verify_oidc_claims(claims).await.unwrap_err();
+            assert_eq!(err.status, "invalid-credentials");
+            assert_eq!(err.http_status, 401);
+            assert_eq!(err.description, "Unauthorized");
+        }
     }
 }

@@ -331,7 +331,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_no_keys_in_verifier_fallsback_to_fxa() -> Result<(), TokenserverError> {
-        let mut server = mockito::Server::new();
+        let mut server = mockito::Server::new_async().await;
         let mock_jwks = server.mock("GET", "/v1/jwks").with_status(500).create();
 
         let body = json!({
@@ -363,7 +363,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_expired_signature_fails() -> Result<(), TokenserverError> {
-        let mut server = mockito::Server::new();
+        let mut server = mockito::Server::new_async().await;
         let mock = server.mock("POST", "/v1/verify").create();
         mock_jwk_verifier!(Err(JWTVerifyError::InvalidSignature));
 
@@ -391,7 +391,7 @@ mod tests {
     #[tokio::test]
     async fn test_verifier_attempts_all_keys_if_invalid_signature() -> Result<(), TokenserverError>
     {
-        let mut server = mockito::Server::new();
+        let mut server = mockito::Server::new_async().await;
         let mock = server.mock("POST", "/v1/verify").create();
         #[derive(Debug, Clone)]
         struct MockJWTVerifier {
@@ -448,7 +448,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_verifier_all_signature_failures_fails() -> Result<(), TokenserverError> {
-        let mut server = mockito::Server::new();
+        let mut server = mockito::Server::new_async().await;
         let mock_verify = server.mock("POST", "/v1/verify").create();
         mock_jwk_verifier!(Err(JWTVerifyError::InvalidSignature));
 
@@ -475,7 +475,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_verifier_fallsback_if_decode_error() -> Result<(), TokenserverError> {
-        let mut server = mockito::Server::new();
+        let mut server = mockito::Server::new_async().await;
         let body = json!({
             "user": "fxa_id",
             "scope": [SYNC_SCOPE],
@@ -511,7 +511,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_no_sync_scope_fails() -> Result<(), TokenserverError> {
-        let server = mockito::Server::new();
+        let server = mockito::Server::new_async().await;
         let token_claims = TokenClaims {
             user: "fxa_id".to_string(),
             scope: "some other scope".to_string(),
@@ -542,7 +542,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_fxa_rejects_token_no_matter_the_body() -> Result<(), TokenserverError> {
-        let mut server = mockito::Server::new();
+        let mut server = mockito::Server::new_async().await;
         let body = json!({
             "user": "fxa_id",
             "scope": [SYNC_SCOPE],
@@ -583,7 +583,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_fxa_accepts_token_but_bad_body() -> Result<(), TokenserverError> {
-        let mut server = mockito::Server::new();
+        let mut server = mockito::Server::new_async().await;
         let body = json!({
             "bad_key": "foo",
             "scope": [SYNC_SCOPE],
@@ -685,7 +685,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_fxa_ignores_iat_as_generation() -> Result<(), TokenserverError> {
-        let server = mockito::Server::new();
+        let server = mockito::Server::new_async().await;
         let token_claims = TokenClaims {
             user: "fxa_id".to_string(),
             scope: SYNC_SCOPE.to_string(),

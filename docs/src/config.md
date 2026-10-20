@@ -158,7 +158,7 @@ would silently drop the payload.
 With `OAUTH_PROVIDER=oidc`, Tokenserver accepts an access token only if it is:
 
 - an RFC 9068 access token, with header `typ: at+jwt` (Keycloak client option `access.token.header.type.rfc9068`), signed with RS256 and carrying an unexpired `exp`
-- issued by `iss` equal to `OIDC_ISSUER_URL` (a trailing `/` is ignored)
+- issued by `iss` exactly equal to `OIDC_ISSUER_URL`, or to `OIDC_ISSUER_URL` without one trailing `/` (Keycloak's `iss` has none)
 - for an `aud` that contains `OIDC_AUDIENCE` (in Keycloak, an audience mapper)
 - issued to a client listed in `OIDC_ALLOWED_CLIENTS`, as `azp` (a token without `azp` is rejected)
 - granted the `https://identity.mozilla.com/apps/oldsync` scope, in a space-separated `scope`

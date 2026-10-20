@@ -104,7 +104,11 @@ impl OidcTokenClaims {
         if self.user.is_empty() {
             return Err(unauthorized_err_with_ctx("Empty OIDC token subject"));
         }
-        if self.iss.trim_end_matches('/') != expected.issuer.trim_end_matches('/') {
+        // The token's issuer must match exactly; only the configured issuer may have a trailing
+        // "/" that the token's lacks
+        if self.iss != expected.issuer
+            && Some(self.iss.as_str()) != expected.issuer.strip_suffix('/')
+        {
             return Err(unauthorized_err_with_ctx("Unexpected OIDC token issuer"));
         }
         if !self.aud.contains(&expected.audience) {
@@ -736,12 +740,20 @@ mod tests {
     async fn verify_oidc_claims(
         claims: serde_json::Value,
     ) -> Result<VerifyOutput, TokenserverError> {
+        verify_oidc_claims_with(&oidc_settings(), claims).await
+    }
+
+    /// `verify_oidc_claims` with the given settings
+    async fn verify_oidc_claims_with(
+        settings: &Settings,
+        claims: serde_json::Value,
+    ) -> Result<VerifyOutput, TokenserverError> {
         mock_jwk_verifier!(
             token,
             serde_json::from_str(token).map_err(|_| JWTVerifyError::DecodingError)
         );
         let verifier: Verifier<MockJWTVerifier> =
-            Verifier::new(&oidc_settings(), vec![MockJWTVerifier {}])?;
+            Verifier::new(settings, vec![MockJWTVerifier {}])?;
         verifier
             .verify(claims.to_string(), &Default::default())
             .await
@@ -830,12 +842,31 @@ mod tests {
         // `aud` can be a single audience or a list
         verify_oidc_claims(claims(json!(OIDC_ISSUER), json!("tokenserver"))).await?;
         verify_oidc_claims(claims(
-            json!(format!("{OIDC_ISSUER}/")),
+            json!(OIDC_ISSUER),
             json!(["account", "tokenserver"]),
         ))
         .await?;
+        // A configured issuer may end in "/" where the token's doesn't, or match it exactly
+        let settings = Settings {
+            oidc_issuer_url: Some(format!("{OIDC_ISSUER}/")),
+            ..oidc_settings()
+        };
+        for iss in [OIDC_ISSUER.to_owned(), format!("{OIDC_ISSUER}/")] {
+            verify_oidc_claims_with(&settings, claims(json!(iss), json!("tokenserver"))).await?;
+        }
+        let err = verify_oidc_claims_with(
+            &settings,
+            claims(json!(format!("{OIDC_ISSUER}//")), json!("tokenserver")),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err.http_status, 401);
+        assert_eq!(err.context, "Unexpected OIDC token issuer");
 
         for (iss, aud) in [
+            // The token's issuer isn't trimmed
+            (json!(format!("{OIDC_ISSUER}/")), json!("tokenserver")),
+            (json!(format!("{OIDC_ISSUER}//")), json!("tokenserver")),
             (
                 json!("http://127.0.0.1:1/realms/other"),
                 json!("tokenserver"),

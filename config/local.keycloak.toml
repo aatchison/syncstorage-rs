@@ -4,11 +4,11 @@
 # =============================================================================
 #
 # Use with a syncserver built with `--no-default-features
-# --features=syncstorage-db/mysql,keycloak` (see Dockerfile.keycloak) and a
+# --features=syncstorage-db/mysql` (see Dockerfile.keycloak) and a
 # Keycloak server with the realm in keycloak/realm-export.json, for example the
 # one from docker/docker-compose.mysql.keycloak.yaml:
 #
-#     cargo run --no-default-features --features=syncstorage-db/mysql,keycloak \
+#     cargo run --no-default-features --features=syncstorage-db/mysql \
 #         -- --config config/local.keycloak.toml
 #
 # The general settings are explained in config/local.example.toml and
@@ -42,17 +42,12 @@ tokenserver.fxa_email_domain = "localhost"
 # REQUIRED for real deployments. Secret used to hash users' metrics UIDs.
 tokenserver.fxa_metrics_hash_secret = "INSERT_SECRET_KEY_HERE"
 
-# Verify tokens with Keycloak instead of FxA. Keys are fetched from
-# {keycloak_server_url}/realms/{keycloak_realm}/protocol/openid-connect/certs.
-tokenserver.oauth_provider = "keycloak"
-tokenserver.keycloak_server_url = "http://localhost:7080"
-tokenserver.keycloak_realm = "sync"
-tokenserver.keycloak_request_timeout = 10
-
-# Apply the OIDC request rules (no FxA generation; keys_changed_at from the
-# X-KeyID header stands in for it).
-tokenserver.oauth_provider_type = "oidc"
+# Verify tokens from Keycloak (a generic OIDC provider) instead of FxA. Keys are
+# fetched from {oidc_issuer_url}/protocol/openid-connect/certs, and tokens must
+# carry oidc_issuer_url as `iss`, oidc_audience in `aud`, and the oldsync scope.
+tokenserver.oauth_provider = "oidc"
 tokenserver.oidc_issuer_url = "http://localhost:7080/realms/sync"
+tokenserver.oidc_audience = "tokenserver"
 
 # -----------------------------------------------------------------------------
 # CORS (optional)

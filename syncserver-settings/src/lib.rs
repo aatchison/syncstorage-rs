@@ -9,7 +9,7 @@ use syncserver_common::{
     X_WEAVE_TIMESTAMP, X_WEAVE_TOTAL_BYTES, X_WEAVE_TOTAL_RECORDS,
 };
 use syncstorage_settings::Settings as SyncstorageSettings;
-use tokenserver_settings::Settings as TokenserverSettings;
+use tokenserver_settings::{OAuthProvider, Settings as TokenserverSettings};
 use url::Url;
 
 pub const COLLECTION_ID_REGEX: &str = r"[a-zA-Z0-9._-]{1,32}";
@@ -237,6 +237,39 @@ impl Settings {
                 return Err(ConfigError::Message(
                     "Invalid SYNC_TOKENSERVER__INIT_NODE_URL: \
                      requires an \"https\"/\"http\" scheme"
+                        .to_owned(),
+                ));
+            }
+        }
+
+        // An OIDC provider has no FxA fallback, so its issuer and audience must be set.
+        if self.tokenserver.enabled && self.tokenserver.oauth_provider == OAuthProvider::Oidc {
+            let issuer = self.tokenserver.oidc_issuer_url.as_deref().ok_or_else(|| {
+                ConfigError::Message(
+                    "SYNC_TOKENSERVER__OIDC_ISSUER_URL must be set when \
+                     SYNC_TOKENSERVER__OAUTH_PROVIDER is \"oidc\""
+                        .to_owned(),
+                )
+            })?;
+            let url = Url::parse(issuer).map_err(|e| {
+                ConfigError::Message(format!("Invalid SYNC_TOKENSERVER__OIDC_ISSUER_URL: {e}"))
+            })?;
+            if !["http", "https"].contains(&url.scheme()) {
+                return Err(ConfigError::Message(
+                    "Invalid SYNC_TOKENSERVER__OIDC_ISSUER_URL: \
+                     requires an \"https\"/\"http\" scheme"
+                        .to_owned(),
+                ));
+            }
+            if self
+                .tokenserver
+                .oidc_audience
+                .as_deref()
+                .is_none_or(str::is_empty)
+            {
+                return Err(ConfigError::Message(
+                    "SYNC_TOKENSERVER__OIDC_AUDIENCE must be set when \
+                     SYNC_TOKENSERVER__OAUTH_PROVIDER is \"oidc\""
                         .to_owned(),
                 ));
             }
@@ -657,6 +690,75 @@ mod test {
                     settings.syncstorage.gcs_payload_offload_collections,
                     vec!["tabs".to_owned(), "history".to_owned()]
                 );
+            },
+        );
+    }
+
+    #[test]
+    fn test_oidc_provider_requires_issuer_and_audience() {
+        let vars = |issuer: Option<&'static str>, audience: Option<&'static str>| {
+            [
+                (
+                    "SYNC_SYNCSTORAGE__DATABASE_URL",
+                    Some(TEST_SYNCSTORAGE_DATABASE_URL),
+                ),
+                (
+                    "SYNC_TOKENSERVER__DATABASE_URL",
+                    Some(TEST_TOKENSERVER_DATABASE_URL),
+                ),
+                ("SYNC_TOKENSERVER__ENABLED", Some("true")),
+                ("SYNC_TOKENSERVER__OAUTH_PROVIDER", Some("oidc")),
+                ("SYNC_TOKENSERVER__OIDC_ISSUER_URL", issuer),
+                ("SYNC_TOKENSERVER__OIDC_AUDIENCE", audience),
+            ]
+        };
+        temp_env::with_vars(vars(None, Some("syncserver")), || {
+            let err = Settings::with_env_and_config_file(None)
+                .expect_err("an OIDC provider with no issuer should fail validation");
+            assert!(
+                err.to_string()
+                    .contains("SYNC_TOKENSERVER__OIDC_ISSUER_URL")
+            );
+        });
+        temp_env::with_vars(
+            vars(Some("keycloak/realms/sync"), Some("syncserver")),
+            || {
+                let err = Settings::with_env_and_config_file(None)
+                    .expect_err("an OIDC issuer that isn't a URL should fail validation");
+                assert!(
+                    err.to_string()
+                        .contains("SYNC_TOKENSERVER__OIDC_ISSUER_URL")
+                );
+            },
+        );
+        temp_env::with_vars(vars(Some("http://keycloak:7080/realms/sync"), None), || {
+            let err = Settings::with_env_and_config_file(None)
+                .expect_err("an OIDC provider with no audience should fail validation");
+            assert!(err.to_string().contains("SYNC_TOKENSERVER__OIDC_AUDIENCE"));
+        });
+        temp_env::with_vars(
+            vars(Some("http://keycloak:7080/realms/sync"), Some("syncserver")),
+            || {
+                let settings = Settings::with_env_and_config_file(None)
+                    .expect("an OIDC provider with an issuer and audience should validate");
+                assert_eq!(settings.tokenserver.oauth_provider, OAuthProvider::Oidc);
+            },
+        );
+    }
+
+    #[test]
+    fn test_unknown_oauth_provider_fails() {
+        temp_env::with_vars(
+            [
+                (
+                    "SYNC_SYNCSTORAGE__DATABASE_URL",
+                    Some(TEST_SYNCSTORAGE_DATABASE_URL),
+                ),
+                ("SYNC_TOKENSERVER__OAUTH_PROVIDER", Some("keycloak")),
+            ],
+            || {
+                Settings::with_env_and_config_file(None)
+                    .expect_err("an unknown oauth_provider should not fall back to FxA");
             },
         );
     }

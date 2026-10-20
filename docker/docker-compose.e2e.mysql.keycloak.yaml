@@ -35,8 +35,9 @@ services:
       keycloak:
         condition: service_healthy
     environment:
-      SYNC_TOKENSERVER__OAUTH_PROVIDER_TYPE: oidc
+      SYNC_TOKENSERVER__OAUTH_PROVIDER: oidc
       SYNC_TOKENSERVER__OIDC_ISSUER_URL: http://keycloak:7080/realms/sync
+      SYNC_TOKENSERVER__OIDC_AUDIENCE: tokenserver
       RUST_BACKTRACE: 1
 
   e2e-tests:

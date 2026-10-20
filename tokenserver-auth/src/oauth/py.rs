@@ -10,7 +10,7 @@ use serde_json;
 use std::ffi::CStr;
 use syncserver_common::{BlockingThreadpool, Metrics};
 use tokenserver_common::TokenserverError;
-use tokenserver_settings::Settings;
+use tokenserver_settings::{OAuthProvider, Settings};
 use tokio::time;
 
 use super::VerifyOutput;
@@ -32,6 +32,14 @@ impl Verifier {
         settings: &Settings,
         blocking_threadpool: Arc<BlockingThreadpool>,
     ) -> Result<Self, TokenserverError> {
+        // The Python verifier only verifies FxA tokens
+        if settings.oauth_provider != OAuthProvider::Fxa {
+            return Err(TokenserverError {
+                context: "oauth_provider \"oidc\" needs a build without the py_verifier feature"
+                    .to_owned(),
+                ..TokenserverError::internal_error()
+            });
+        }
         let inner: Py<PyAny> = Python::attach(|py| -> Result<Py<PyAny>, TokenserverError> {
             let code: &CStr = c_str!(include_str!("verify.py"));
             let module = PyModule::from_code(py, code, c_str!("verify.py"), c_str!("verify.py"))

@@ -148,12 +148,9 @@ would silently drop the payload.
 | <span id="SYNC_TOKENSERVER__FXA_OAUTH_PRIMARY_JWK__N"></span>SYNC_TOKENSERVER__FXA_OAUTH_PRIMARY_JWK__N | None | Primary JWK modulus (RSA public key component) |
 | <span id="SYNC_TOKENSERVER__FXA_OAUTH_PRIMARY_JWK__E"></span>SYNC_TOKENSERVER__FXA_OAUTH_PRIMARY_JWK__E | None | Primary JWK exponent (RSA public key component) |
 | <span id="SYNC_TOKENSERVER__FXA_OAUTH_SECONDARY_JWK"></span>SYNC_TOKENSERVER__FXA_OAUTH_SECONDARY_JWK__* | None | Secondary JWK (same structure as primary) |
-| <span id="SYNC_TOKENSERVER__OAUTH_PROVIDER"></span>SYNC_TOKENSERVER__OAUTH_PROVIDER | fxa | OAuth verifier to use: `fxa` or `keycloak`. `keycloak` needs a build with the `keycloak` feature and without `py_verifier` |
-| <span id="SYNC_TOKENSERVER__OAUTH_PROVIDER_TYPE"></span>SYNC_TOKENSERVER__OAUTH_PROVIDER_TYPE | fxa | Native verifier mode: `fxa` or `oidc`. In `oidc` mode keys come from `OIDC_ISSUER_URL` and there is no `/v1/verify` fallback |
-| <span id="SYNC_TOKENSERVER__OIDC_ISSUER_URL"></span>SYNC_TOKENSERVER__OIDC_ISSUER_URL | None | OIDC issuer URL, e.g. `http://keycloak:7080/realms/sync`. Used instead of `FXA_OAUTH_SERVER_URL` in `oidc` mode |
-| <span id="SYNC_TOKENSERVER__KEYCLOAK_SERVER_URL"></span>SYNC_TOKENSERVER__KEYCLOAK_SERVER_URL | http://localhost:7080 | Keycloak base URL, used when `OAUTH_PROVIDER` is `keycloak` |
-| <span id="SYNC_TOKENSERVER__KEYCLOAK_REALM"></span>SYNC_TOKENSERVER__KEYCLOAK_REALM | sync | Keycloak realm name |
-| <span id="SYNC_TOKENSERVER__KEYCLOAK_REQUEST_TIMEOUT"></span>SYNC_TOKENSERVER__KEYCLOAK_REQUEST_TIMEOUT | 10 | Keycloak request timeout in seconds |
+| <span id="SYNC_TOKENSERVER__OAUTH_PROVIDER"></span>SYNC_TOKENSERVER__OAUTH_PROVIDER | fxa | Identity provider: `fxa` or `oidc` (a generic OpenID Connect provider such as Keycloak). `oidc` needs a build without `py_verifier`, never falls back to FxA's `/v1/verify`, and requires `OIDC_ISSUER_URL` and `OIDC_AUDIENCE` |
+| <span id="SYNC_TOKENSERVER__OIDC_ISSUER_URL"></span>SYNC_TOKENSERVER__OIDC_ISSUER_URL | None | OIDC issuer URL, e.g. `http://keycloak:7080/realms/sync`. Tokens must carry it as `iss`; keys come from `{OIDC_ISSUER_URL}/protocol/openid-connect/certs` |
+| <span id="SYNC_TOKENSERVER__OIDC_AUDIENCE"></span>SYNC_TOKENSERVER__OIDC_AUDIENCE | None | Audience that OIDC access tokens must include in `aud` |
 
 ### StatsD Metrics
 

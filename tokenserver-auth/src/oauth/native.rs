@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use std::{borrow::Cow, time::Duration};
 use syncserver_common::Metrics;
 use tokenserver_common::TokenserverError;
-use tokenserver_settings::Settings;
+use tokenserver_settings::{OAuthProvider, Settings};
 
 const SYNC_SCOPE: &str = "https://identity.mozilla.com/apps/oldsync";
 
@@ -63,7 +63,7 @@ pub struct Verifier<J> {
     jwks_url: Url,
     jwk_verifiers: Vec<J>,
     http_client: reqwest::Client,
-    /// True when `oauth_provider_type` is "oidc".
+    /// True when `oauth_provider` is "oidc".
     oidc: bool,
 }
 
@@ -72,13 +72,12 @@ where
     J: JWTVerifier,
 {
     pub fn new(settings: &Settings, jwk_verifiers: Vec<J>) -> Result<Self, TokenserverError> {
-        let oidc = settings.oauth_provider_type.eq_ignore_ascii_case("oidc");
+        let oidc = settings.oauth_provider == OAuthProvider::Oidc;
         let (verify_url, jwks_url) = if oidc {
             // For OIDC providers like Keycloak
-            let issuer = settings
-                .oidc_issuer_url
-                .as_ref()
-                .unwrap_or(&settings.fxa_oauth_server_url);
+            let issuer = settings.oidc_issuer_url.as_ref().ok_or_else(|| {
+                internal_err_with_ctx("oauth_provider is \"oidc\" but oidc_issuer_url is not set")
+            })?;
             // Make sure the issuer path ends in "/" so that `join` appends to it instead of
             // replacing its last segment (e.g. ".../realms/sync").
             let issuer = if issuer.ends_with('/') {
@@ -625,7 +624,7 @@ mod tests {
 
     fn oidc_settings() -> Settings {
         Settings {
-            oauth_provider_type: "oidc".to_owned(),
+            oauth_provider: OAuthProvider::Oidc,
             // Nothing listens here; these tests must not make any requests
             oidc_issuer_url: Some("http://127.0.0.1:1/realms/sync".to_owned()),
             ..Settings::default()

@@ -64,7 +64,7 @@ impl ServerState {
                 );
             }
             Box::new(
-                oauth::UnifiedVerifier::new(settings, jwk_verifiers)
+                oauth::Verifier::new(settings, jwk_verifiers)
                     .expect("failed to create Tokenserver OAuth verifier"),
             )
         };

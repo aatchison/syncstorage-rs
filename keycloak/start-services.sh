@@ -26,8 +26,8 @@ if [ -z "$devcontainer" ]; then
     exit 1
 fi
 
-podman pull -q "$MYSQL_IMAGE" >/dev/null
-podman pull -q "$KEYCLOAK_IMAGE" >/dev/null
+podman image exists "$MYSQL_IMAGE" || podman pull -q "$MYSQL_IMAGE" >/dev/null
+podman image exists "$KEYCLOAK_IMAGE" || podman pull -q "$KEYCLOAK_IMAGE" >/dev/null
 podman rm -f -v "$MYSQL_CTR" "$KEYCLOAK_CTR" >/dev/null 2>&1 || true
 
 # Secrets: hex, so they can go in database URLs as they are

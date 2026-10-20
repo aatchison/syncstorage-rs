@@ -163,7 +163,7 @@ With `OAUTH_PROVIDER=oidc`, Tokenserver accepts an access token only if it is:
 - issued to a client listed in `OIDC_ALLOWED_CLIENTS`, as `azp` (a token without `azp` is rejected)
 - granted the `https://identity.mozilla.com/apps/oldsync` scope, in a space-separated `scope`
 
-No generation claim is part of the OIDC token contract. The `fxa-generation` claim that FxA mode relies on is not supported in OIDC mode, and isn't needed for revocation; don't add a Keycloak mapper for it.
+No generation claim is part of the OIDC token contract, and revocation doesn't need one: in this deployment, don't map an `fxa-generation` claim (no Keycloak mapper for it). Tokenserver still reads the claim if a token carries one, as in FxA mode, and a mapped claim changes how retirement works. The OIDC-mode check that refuses a retired user (generation `MAX_GENERATION`, `i64::MAX`) applies only to tokens without a generation; a token with one is left to the same generation checks as in FxA mode, which refuse it only if its generation is lower than the stored one. So a retired user whose token carries `i64::MAX` (for example from a user attribute the user can edit) is accepted again, and a token carrying a higher generation than the stored one also raises the stored generation, after which tokens with lower values are refused.
 
 The signing keys are fetched from `{OIDC_ISSUER_URL}/protocol/openid-connect/certs` on every request, with no cache. If that fetch fails, Tokenserver returns 503; tokens that the fetched keys don't verify get 401.
 

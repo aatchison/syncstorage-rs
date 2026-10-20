@@ -26,6 +26,7 @@ from .helpers import (
     NODE_URL,
     Database,
     KeycloakAdmin,
+    RevokerEnv,
     client_uuid,
     run_revoker,
 )
@@ -101,7 +102,7 @@ def revoker_env(tmp_path_factory):
     """Return the environment the revoker runs with, its cursor in a temp dir."""
     issuer = os.environ["SYNC_TOKENSERVER__OIDC_ISSUER_URL"].rstrip("/")
     base, realm = issuer.rsplit("/realms/", 1)
-    env = dict(os.environ)
+    env = RevokerEnv(os.environ)
     env.update(
         {
             "REVOKER_KEYCLOAK_URL": base,

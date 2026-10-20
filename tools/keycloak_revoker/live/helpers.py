@@ -1,7 +1,14 @@
 # This Source Code Form is subject to the terms of the Mozilla Public
 # License, v. 2.0. If a copy of the MPL was not distributed with this file,
 # You can obtain one at http://mozilla.org/MPL/2.0/.
-"""Helpers and constants for the live revocation tests. No fixtures here."""
+"""Helpers and constants for the live revocation tests. No fixtures here.
+
+Tokens, passwords and the revoker's environment are held in Secret and
+RevokerEnv, whose repr is masked, and HTTP calls go through `send`, which
+unwraps them only inside it and drops the requests traceback when a call
+fails. So a failing test shows none of them: neither pytest's assertion
+details nor the arguments it prints for each frame of a traceback.
+"""
 
 import base64
 import html
@@ -11,7 +18,7 @@ import re
 import subprocess
 import sys
 import time
-from typing import Any, Mapping
+from typing import Any, Optional
 
 import requests
 from sqlalchemy.sql import text as sqltext
@@ -38,6 +45,77 @@ BROWSER_REDIRECT_URI = "http://127.0.0.1/revoker-live/callback"
 NODE_URL = "https://revoker-live.example.com"
 
 
+class Secret:
+    """A token, password or other secret value, masked in test output."""
+
+    __slots__ = ("value",)
+
+    def __init__(self, value: str) -> None:
+        self.value = value
+
+    def __repr__(self) -> str:
+        return "Secret(***)"
+
+    __str__ = __repr__
+
+
+class RevokerEnv(dict):
+    """The revoker's environment; its repr names the variables only."""
+
+    def __repr__(self) -> str:
+        return f"RevokerEnv({', '.join(sorted(self))})"
+
+    def but(self, **changes: str) -> "RevokerEnv":
+        """Return a copy with some variables changed."""
+        return RevokerEnv({**self, **changes})
+
+
+def reveal(value: Any) -> Any:
+    """Return `value` with every Secret in it (in dicts and lists) unwrapped."""
+    if isinstance(value, Secret):
+        return value.value
+    if isinstance(value, dict):
+        return {k: reveal(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [reveal(v) for v in value]
+    return value
+
+
+def send(
+    method: str,
+    url: str,
+    session: Optional[requests.Session] = None,
+    **kwargs: Any,
+) -> requests.Response:
+    """Send an HTTP request whose data, json and headers may hold Secrets.
+
+    A failed request raises AssertionError without the requests traceback,
+    whose frames would show the unwrapped values.
+    """
+    try:
+        return (session or requests.Session()).request(
+            method, url, timeout=10, **reveal(kwargs)
+        )
+    except requests.RequestException as e:
+        raise AssertionError(f"{method} {url}: {type(e).__name__}") from None
+
+
+def why(res: requests.Response) -> str:
+    """Describe a failed response for an assertion message, without any token.
+
+    Only the status and the error fields of a Keycloak or Tokenserver error
+    body are kept; a success body, which holds tokens or Hawk credentials,
+    shows none of them.
+    """
+    try:
+        body = res.json()
+    except ValueError:
+        body = None
+    fields = ("error", "error_description", "status", "errors")
+    errors = {k: body[k] for k in fields if k in body} if isinstance(body, dict) else {}
+    return f"HTTP {res.status_code} {json.dumps(errors)}"
+
+
 class KeycloakAdmin:
     """Calls the Keycloak admin API as the master realm's admin."""
 
@@ -45,34 +123,37 @@ class KeycloakAdmin:
         issuer = os.environ["SYNC_TOKENSERVER__OIDC_ISSUER_URL"].rstrip("/")
         self.issuer = issuer
         self.base, self.realm = issuer.rsplit("/realms/", 1)
-        self._token = None
+        self._token = Secret("")
         self._expires = 0.0
 
+    def __repr__(self) -> str:
+        return f"KeycloakAdmin({self.issuer})"
+
     def __call__(self, method: str, path: str, **kwargs: Any) -> requests.Response:
+        """Call the realm's admin API; `json` and `params` may hold Secrets."""
         if self._expires < time.time() + 10:
-            res = requests.post(
+            res = send(
+                "POST",
                 f"{self.base}/realms/master/protocol/openid-connect/token",
                 data={
                     "grant_type": "password",
                     "client_id": "admin-cli",
                     "username": os.environ["KEYCLOAK_ADMIN_USERNAME"],
-                    "password": os.environ["KEYCLOAK_ADMIN_PASSWORD"],
+                    "password": Secret(os.environ["KEYCLOAK_ADMIN_PASSWORD"]),
                 },
-                timeout=10,
             )
-            res.raise_for_status()
-            self._token = res.json()["access_token"]
+            assert res.status_code == 200, why(res)
+            self._token = Secret(res.json()["access_token"])
             self._expires = time.time() + res.json()["expires_in"]
-        return requests.request(
+        return send(
             method,
             f"{self.base}/admin/realms/{self.realm}{path}",
-            headers={"Authorization": f"Bearer {self._token}"},
-            timeout=10,
+            headers={"Authorization": Secret(f"Bearer {self._token.value}")},
             **kwargs,
         )
 
 
-def run_revoker(env: Mapping[str, str], *args: str, status: int = 0) -> str:
+def run_revoker(env: RevokerEnv, *args: str, status: int = 0) -> str:
     """Run revoker.py once with `args`; fail the test unless it exits `status`."""
     proc = subprocess.run(
         [sys.executable, REVOKER, *args],
@@ -89,16 +170,16 @@ def run_revoker(env: Mapping[str, str], *args: str, status: int = 0) -> str:
     return proc.stderr
 
 
-def jwt_payload(token: str) -> dict:
+def jwt_payload(token: Secret) -> dict:
     """Decode a JWT's payload without verifying it (to read typ in tests)."""
-    payload = token.split(".")[1]
+    payload = token.value.split(".")[1]
     claims: dict = json.loads(
         base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4))
     )
     return claims
 
 
-def create_user(admin: KeycloakAdmin, name: str, password: str) -> str:
+def create_user(admin: KeycloakAdmin, name: str, password: Secret) -> str:
     """Create an enabled Keycloak user with a password; return its ID (sub)."""
     res = admin(
         "POST",
@@ -115,7 +196,7 @@ def create_user(admin: KeycloakAdmin, name: str, password: str) -> str:
             ],
         },
     )
-    assert res.status_code == 201, res.text
+    assert res.status_code == 201, why(res)
     user_id: str = res.headers["Location"].rstrip("/").rsplit("/", 1)[1]
     return user_id
 
@@ -142,10 +223,13 @@ def token_endpoint(admin: KeycloakAdmin) -> str:
     return f"{admin.issuer}/protocol/openid-connect/token"
 
 
-def login(admin: KeycloakAdmin, name: str, password: str, offline: bool) -> dict:
-    """Sign in as LIVE_CLIENT_ID; return the token response."""
+def login(
+    admin: KeycloakAdmin, name: str, password: Secret, offline: bool
+) -> dict[str, Secret]:
+    """Sign in as LIVE_CLIENT_ID; return the access and refresh tokens."""
     scope = DEFAULT_OAUTH_SCOPE + (" offline_access" if offline else "")
-    res = requests.post(
+    res = send(
+        "POST",
         token_endpoint(admin),
         data={
             "grant_type": "password",
@@ -154,43 +238,47 @@ def login(admin: KeycloakAdmin, name: str, password: str, offline: bool) -> dict
             "password": password,
             "scope": scope,
         },
-        timeout=10,
     )
-    assert res.status_code == 200, res.text
-    tokens: dict = res.json()
+    assert res.status_code == 200, why(res)
+    body = res.json()
+    tokens = {
+        "access_token": Secret(body["access_token"]),
+        "refresh_token": Secret(body["refresh_token"]),
+    }
     # The session really is of the kind the test case is about
+    typ = jwt_payload(tokens["refresh_token"])["typ"]
     expected = "Offline" if offline else "Refresh"
-    assert jwt_payload(tokens["refresh_token"])["typ"] == expected
+    assert typ == expected, f"refresh token of type {typ}"
     return tokens
 
 
-def refresh(admin: KeycloakAdmin, refresh_token: str) -> requests.Response:
+def refresh(admin: KeycloakAdmin, refresh_token: Secret) -> requests.Response:
     """Refresh as LIVE_CLIENT_ID; return the response."""
-    return requests.post(
+    return send(
+        "POST",
         token_endpoint(admin),
         data={
             "grant_type": "refresh_token",
             "client_id": LIVE_CLIENT_ID,
             "refresh_token": refresh_token,
         },
-        timeout=10,
     )
 
 
-def introspect(admin: KeycloakAdmin, token: str) -> bool:
+def introspect(admin: KeycloakAdmin, token: Secret) -> bool:
     """Return whether Keycloak reports the token as active (asked as the revoker)."""
     with open(os.environ["REVOKER_CLIENT_SECRET_FILE"]) as f:
-        secret = f.read().strip()
-    res = requests.post(
+        secret = Secret(f.read().strip())
+    res = send(
+        "POST",
         f"{token_endpoint(admin)}/introspect",
         data={
             "client_id": os.environ["REVOKER_CLIENT_ID"],
             "client_secret": secret,
             "token": token,
         },
-        timeout=10,
     )
-    assert res.status_code == 200, res.status_code
+    assert res.status_code == 200, why(res)
     active: bool = res.json()["active"]
     return active
 
@@ -202,7 +290,7 @@ def _browse(session: requests.Session, method: str, url: str, **kwargs: Any) -> 
     http://localhost too, which requests doesn't, so they are unmarked here
     (the live tests reach Keycloak over plain HTTP on localhost only).
     """
-    res = session.request(method, url, allow_redirects=False, timeout=10, **kwargs)
+    res = send(method, url, session=session, allow_redirects=False, **kwargs)
     for cookie in session.cookies:
         if cookie.domain in ("localhost.local", "127.0.0.1"):
             cookie.secure = False
@@ -228,7 +316,7 @@ def _follow(session: requests.Session, res: requests.Response) -> requests.Respo
 
 
 def change_password_as_user(
-    admin: KeycloakAdmin, name: str, password: str, new_password: str
+    admin: KeycloakAdmin, name: str, password: Secret, new_password: Secret
 ) -> None:
     """Change the user's password as the user would, in Keycloak's own pages.
 
@@ -266,7 +354,9 @@ def change_password_as_user(
     )
     res = _follow(session, res)
     assert res.is_redirect, res.status_code
-    assert "kc_action_status=success" in res.headers["Location"]
+    # The redirect holds an authorization code: kept out of the assertion
+    succeeded = "kc_action_status=success" in res.headers["Location"]
+    assert succeeded, "Keycloak didn't report the password update as done"
 
 
 def user_events(admin: KeycloakAdmin, user_id: str) -> list:
@@ -283,16 +373,19 @@ def admin_events_on(admin: KeycloakAdmin, user_id: str) -> list:
     return [event["operationType"] for event in res.json()]
 
 
-def exchange(access_token: str) -> requests.Response:
-    """Ask Tokenserver for a sync token with an access token; return the response."""
+def exchange(access_token: Secret) -> requests.Response:
+    """Ask Tokenserver for a sync token with an access token; return the response.
+
+    A 200 response holds Hawk credentials: describe it with `why` only.
+    """
     client_state = base64.urlsafe_b64encode(bytes.fromhex("aaaa")).rstrip(b"=")
-    return requests.get(
+    return send(
+        "GET",
         f"{os.environ['TOKENSERVER_HOST']}/1.0/sync/1.5",
         headers={
-            "Authorization": f"Bearer {access_token}",
+            "Authorization": Secret(f"Bearer {access_token.value}"),
             "X-KeyID": f"1234-{client_state.decode()}",
         },
-        timeout=10,
     )
 
 

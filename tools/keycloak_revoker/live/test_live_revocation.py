@@ -17,6 +17,7 @@ import pytest
 
 from .helpers import (
     MAX_GENERATION,
+    Secret,
     admin_events_on,
     change_password_as_user,
     create_user,
@@ -28,20 +29,25 @@ from .helpers import (
     run_revoker,
     user_events,
     user_rows,
+    why,
 )
 
 
+def new_password():
+    return Secret(secrets.token_urlsafe(24))
+
+
 def reset_password(admin, user_id):
-    value = secrets.token_urlsafe(24)
-    body = {"type": "password", "value": value, "temporary": False}
+    body = {"type": "password", "value": new_password(), "temporary": False}
     return admin("PUT", f"/users/{user_id}/reset-password", json=body)
 
 
 def update_password(admin, user_id):
     # PUT users/<id> with a credentials array: an admin UPDATE users/<id> event
     rep = admin("GET", f"/users/{user_id}").json()
-    value = secrets.token_urlsafe(24)
-    rep["credentials"] = [{"type": "password", "value": value, "temporary": False}]
+    rep["credentials"] = [
+        {"type": "password", "value": new_password(), "temporary": False}
+    ]
     return admin("PUT", f"/users/{user_id}", json=rep)
 
 
@@ -82,7 +88,7 @@ KEYCLOAK_LEAVES_ALIVE = {
 
 def new_user(admin, label):
     name = f"revoker-live-{label}-{secrets.token_hex(4)}"
-    password = secrets.token_urlsafe(24)
+    password = new_password()
     return name, password, create_user(admin, name, password)
 
 
@@ -98,8 +104,8 @@ def assert_retired(db, user_id, access_token):
     assert all(gen == MAX_GENERATION and replaced is not None for gen, replaced in rows)
     # The deleted user's access token hasn't expired, but is refused
     res = exchange(access_token)
-    assert res.status_code == 401, res.text
-    assert res.json()["status"] == "invalid-generation"
+    assert res.status_code == 401, why(res)
+    assert res.json()["status"] == "invalid-generation", why(res)
 
 
 @pytest.mark.parametrize("offline", [False, True], ids=["online", "offline"])
@@ -110,14 +116,14 @@ def test_revocation(admin, db, revoker, live_client, action, offline):
     tokens = login(admin, name, password, offline)
     access_token, refresh_token = tokens["access_token"], tokens["refresh_token"]
     res = exchange(access_token)
-    assert res.status_code == 200, res.text
+    assert res.status_code == 200, why(res)
     assert introspect(admin, access_token)
     assert_active_record(db, user_id)
     if offline:
         assert len(offline_sessions(admin, user_id, live_client)) == 1
 
     res = ACTIONS[action](admin, user_id)
-    assert res.status_code == 204, res.text
+    assert res.status_code == 204, why(res)
     if (action, offline) in KEYCLOAK_LEAVES_ALIVE:
         assert refresh(admin, refresh_token).status_code == 200
     if offline and action != "delete":
@@ -130,8 +136,8 @@ def test_revocation(admin, db, revoker, live_client, action, offline):
     revoker("--once")
 
     res = refresh(admin, refresh_token)
-    assert res.status_code == 400, res.text
-    assert res.json()["error"] == "invalid_grant"
+    assert res.status_code == 400, why(res)
+    assert res.json()["error"] == "invalid_grant", why(res)
     assert not introspect(admin, access_token)
     assert not introspect(admin, refresh_token)
     if action == "delete":
@@ -149,7 +155,7 @@ def test_password_change_by_the_user(admin, db, revoker, live_client):
     assert exchange(online["access_token"]).status_code == 200
     assert len(offline_sessions(admin, user_id, live_client)) == 1
 
-    change_password_as_user(admin, name, password, secrets.token_urlsafe(24))
+    change_password_as_user(admin, name, password, new_password())
     # Keycloak on its own leaves both sessions working ("Sign out from other
     # devices" wasn't ticked)
     assert refresh(admin, online["refresh_token"]).status_code == 200
@@ -166,8 +172,8 @@ def test_password_change_by_the_user(admin, db, revoker, live_client):
 
     for tokens in (online, offline):
         res = refresh(admin, tokens["refresh_token"])
-        assert res.status_code == 400, res.text
-        assert res.json()["error"] == "invalid_grant"
+        assert res.status_code == 400, why(res)
+        assert res.json()["error"] == "invalid_grant", why(res)
         assert not introspect(admin, tokens["access_token"])
     assert offline_sessions(admin, user_id, live_client) == []
     assert_active_record(db, user_id)
@@ -185,11 +191,9 @@ def test_reconcile_retires_user_deleted_while_revoker_was_down(
     # A revoker that starts after the deletion (a new cursor) never sees it, if
     # it starts more than its overlap later: a first start looks back by it
     time.sleep(2)
-    env = {
-        **revoker_env,
-        "REVOKER_CURSOR_FILE": str(tmp_path / "cursor"),
-        "REVOKER_OVERLAP": "1",
-    }
+    env = revoker_env.but(
+        REVOKER_CURSOR_FILE=str(tmp_path / "cursor"), REVOKER_OVERLAP="1"
+    )
     run_revoker(env, "--once")
     run_revoker(env, "--once")
     assert_active_record(db, user_id)
@@ -204,11 +208,10 @@ def test_reconcile_retires_user_deleted_while_revoker_was_down(
 
 def test_unknown_offline_client_stops_the_revoker(admin, revoker_env, tmp_path):
     """A typo in REVOKER_OFFLINE_CLIENTS fails at startup, before any event."""
-    env = {
-        **revoker_env,
-        "REVOKER_CURSOR_FILE": str(tmp_path / "cursor"),
-        "REVOKER_OFFLINE_CLIENTS": "revoker-live-thunderbird,revoker-live-typo",
-    }
+    env = revoker_env.but(
+        REVOKER_CURSOR_FILE=str(tmp_path / "cursor"),
+        REVOKER_OFFLINE_CLIENTS="revoker-live-thunderbird,revoker-live-typo",
+    )
     output = run_revoker(env, "--once", status=1)
     assert "offline client revoker-live-typo not found in the realm" in output
     assert not (tmp_path / "cursor").exists()

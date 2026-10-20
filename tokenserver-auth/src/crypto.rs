@@ -146,10 +146,7 @@ impl JWTVerifier for JWTVerifierImpl {
                 } else {
                     typ
                 };
-                // Accept both "application/at+jwt" (RFC 9068) and "application/jwt", which is
-                // what Keycloak puts on its access tokens by default.
-                let typ_lower = typ.to_lowercase();
-                if typ_lower != "application/at+jwt" && typ_lower != "application/jwt" {
+                if typ.to_lowercase() != "application/at+jwt" {
                     return Err(JWTVerifyError::TrustError);
                 }
                 Ok(typ)

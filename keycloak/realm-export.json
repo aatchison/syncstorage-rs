@@ -748,6 +748,7 @@
         "client.secret.creation.time": "1747774155",
         "backchannel.logout.session.required": "true",
         "standard.token.exchange.enabled": "false",
+        "access.token.header.type.rfc9068": "true",
         "frontchannel.logout.session.required": "true",
         "oauth2.device.authorization.grant.enabled": "false",
         "display.on.consent.screen": "false",
@@ -808,6 +809,7 @@
         "oidc.ciba.grant.enabled": "false",
         "backchannel.logout.session.required": "true",
         "standard.token.exchange.enabled": "false",
+        "access.token.header.type.rfc9068": "true",
         "frontchannel.logout.session.required": "true",
         "oauth2.device.authorization.grant.enabled": "false",
         "display.on.consent.screen": "false",
@@ -974,7 +976,22 @@
       "attributes": {
         "include.in.token.scope": "true",
         "display.on.consent.screen": "false"
-      }
+      },
+      "protocolMappers": [
+        {
+          "id": "sync-scope-audience-mapper-id",
+          "name": "tokenserver audience",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "consentRequired": false,
+          "config": {
+            "included.custom.audience": "tokenserver",
+            "id.token.claim": "false",
+            "access.token.claim": "true",
+            "introspection.token.claim": "true"
+          }
+        }
+      ]
     },
     {
       "id": "2788178a-558a-465a-9c23-787b3437baf8",

@@ -163,13 +163,35 @@ With `OAUTH_PROVIDER=oidc`, Tokenserver accepts an access token only if it is:
 - issued to a client listed in `OIDC_ALLOWED_CLIENTS`, as `azp` (a token without `azp` is rejected)
 - granted the `https://identity.mozilla.com/apps/oldsync` scope, in a space-separated `scope`
 
-An optional `fxa-generation` claim is used as the user's generation. It must be a JSON number (Keycloak mapper `jsonType` `long`) in milliseconds since the epoch, must never decrease, and must never be lower than any `keys_changed_at` the client has sent. Without it there is no generation-based revocation: a revoked user keeps access for at most the access-token lifetime plus `TOKEN_DURATION`.
+No generation claim is part of the OIDC token contract. The `fxa-generation` claim that FxA mode relies on is not supported in OIDC mode, and isn't needed for revocation; don't add a Keycloak mapper for it.
 
 The signing keys are fetched from `{OIDC_ISSUER_URL}/protocol/openid-connect/certs` on every request, with no cache. If that fetch fails, Tokenserver returns 503; tokens that the fetched keys don't verify get 401.
 
 Of the FxA settings above, these still apply: `FXA_EMAIL_DOMAIN` (users are keyed as `<sub>@<FXA_EMAIL_DOMAIN>`), `FXA_METRICS_HASH_SECRET`, and `FXA_OAUTH_REQUEST_TIMEOUT` (the JWKS request timeout). Startup fails if `FXA_WEBHOOK_ENABLED`, `FXA_OAUTH_PRIMARY_JWK` or `FXA_OAUTH_SECONDARY_JWK` is set in OIDC mode (so Keycloak keys can't be pinned through them), or if `OIDC_ISSUER_URL`, `OIDC_AUDIENCE` or `OIDC_ALLOWED_CLIENTS` is set without `OAUTH_PROVIDER=oidc`.
 
 `keycloak/realm-export.json` is a realm for local development only; don't use it in a deployment.
+
+##### Revocation
+
+Revocation never involves FxA. A user is cut off by revoking their sessions in Keycloak, which then refuses to refresh their tokens. `tools/keycloak_revoker` covers the cases Keycloak leaves half done: it polls the realm's stored events and calls the Keycloak admin API, and retires deleted users in the Tokenserver database. See `tools/keycloak_revoker/README.md` for how to deploy it. The realm must store events: `eventsEnabled` with at least `UPDATE_CREDENTIAL`, `UPDATE_PASSWORD`, `DELETE_ACCOUNT` and `LOGOUT` in `enabledEventTypes`, `eventsExpiration` of at least a few days (the dev realm keeps 7), and `adminEventsEnabled`.
+
+| Case | Who cuts the sessions off |
+| --- | --- |
+| User disabled | Keycloak, natively: every refresh fails |
+| User deleted (by an admin, or by the user through the `delete_account` action) | Keycloak, natively. The revoker also retires the Tokenserver user `<sub>@<FXA_EMAIL_DOMAIN>` |
+| Password reset by an admin | The revoker. Keycloak on its own ends no session at all |
+| Password changed by the user (account console, or the forgot-password email flow) | The revoker. Keycloak's "Sign out from other devices" ends online sessions only, and only if it is ticked; the revoker ends every session either way |
+| Admin "Sign out" | Keycloak ends the online sessions; the revoker ends the offline ones |
+
+For a password change the revoker signs the user out of every session and then revokes their offline sessions of the Thunderbird clients. So whether or not Thunderbird is allowed `offline_access`, its sessions are covered by the revoker. Its `--reconcile` mode retires Tokenserver users whose Keycloak user no longer exists, for deletions whose events were missed.
+
+Nothing is pushed to Tokenserver or the storage nodes. A client cut off this way keeps the access token and Sync token it already holds until they expire. The worst-case time from the event to losing access is:
+
+```text
+revoker poll interval + Keycloak access-token lifespan + TOKEN_DURATION
+```
+
+We recommend a realm `accessTokenLifespan` of 300 s or less, and `SYNC_TOKENSERVER__TOKEN_DURATION` of 300–900 s rather than the default 3600. With the revoker's default 15 s poll, that is a cut-off within about 10–20 minutes. Shorter lifetimes mean more token refreshes and more Tokenserver requests from each client.
 
 ### StatsD Metrics
 

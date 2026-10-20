@@ -129,8 +129,9 @@ secret. Each action is logged with the event it was for, for example
 
 The realm must store events:
 
-- `eventsEnabled: true`, with at least `UPDATE_CREDENTIAL`, `UPDATE_PASSWORD`,
-  `DELETE_ACCOUNT` and `LOGOUT` in `enabledEventTypes`
+- `eventsEnabled: true`, with at least `UPDATE_CREDENTIAL`, `UPDATE_PASSWORD`
+  and `DELETE_ACCOUNT` in `enabledEventTypes`. The dev realm also stores
+  `LOGOUT`, for auditing only: the revoker doesn't use it
 - `eventsExpiration` comfortably longer than the revoker could be down (the dev
   realm keeps 604800 s, 7 days). Events hold user IDs and IP addresses; choose a
   retention that fits your privacy policy. `--reconcile` covers deletions
@@ -143,6 +144,14 @@ only the client-credentials grant, whose service account has the
 `view-clients`. `view-clients` is for the startup lookup of the offline clients:
 with `query-clients` alone Keycloak 26.2 answers that lookup with an empty list.
 It also lets the account read every client's configuration, secrets included.
+The service account needs no realm roles, not even the default ones.
+
+Keycloak's admin API checks the roles in the service account's token. Set
+`fullScopeAllowed: false` on the client, which keeps every other role out of
+those tokens, and give it these four roles as its scope: in the admin console,
+the client's "Client scopes" tab, its dedicated scope, "Scope"; in a realm
+export, `clientScopeMappings`. Without them every admin call gets 403.
+
 The dev realm, `keycloak/realm-export.json`, has such a client, `keycloak-revoker`,
 without a secret: `keycloak/start-services.sh` generates one into
 `/tmp/syncstorage-test-secrets/keycloak-revoker-secret`.

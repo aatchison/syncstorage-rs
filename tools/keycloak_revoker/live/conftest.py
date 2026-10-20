@@ -115,18 +115,24 @@ def revoker_env(tmp_path_factory, revoker_db_url):
     """Return the environment the revoker runs with, its cursor in a temp dir."""
     issuer = os.environ["SYNC_TOKENSERVER__OIDC_ISSUER_URL"].rstrip("/")
     base, realm = issuer.rsplit("/realms/", 1)
-    env = RevokerEnv(os.environ)
-    env.update(
+    # The revoker's own settings only: not the tests' (the Keycloak admin
+    # password, Tokenserver's database URL, proxies)
+    return RevokerEnv(
         {
             "REVOKER_KEYCLOAK_URL": base,
             "REVOKER_REALM": realm,
+            "REVOKER_CLIENT_ID": os.environ["REVOKER_CLIENT_ID"],
+            "REVOKER_CLIENT_SECRET_FILE": os.environ["REVOKER_CLIENT_SECRET_FILE"],
             "REVOKER_OFFLINE_CLIENTS": LIVE_CLIENT_ID,
             "REVOKER_CURSOR_FILE": str(tmp_path_factory.mktemp("revoker") / "cursor"),
             "REVOKER_LOG_LEVEL": "DEBUG",
             "SYNC_TOKENSERVER__DATABASE_URL": revoker_db_url.value,
+            "SYNC_TOKENSERVER__FXA_EMAIL_DOMAIN": os.environ[
+                "SYNC_TOKENSERVER__FXA_EMAIL_DOMAIN"
+            ],
+            "SQLALCHEMY_SILENCE_UBER_WARNING": "1",
         }
     )
-    return env
 
 
 @pytest.fixture(scope="session")

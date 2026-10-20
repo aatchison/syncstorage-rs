@@ -173,7 +173,7 @@ Of the FxA settings above, these still apply: `FXA_EMAIL_DOMAIN` (users are keye
 
 ##### Revocation
 
-Revocation never involves FxA. A user is cut off by revoking their sessions in Keycloak, which then refuses to refresh their tokens. `tools/keycloak_revoker` covers the cases Keycloak leaves half done: it polls the realm's stored events and calls the Keycloak admin API, and retires deleted users in the Tokenserver database. See `tools/keycloak_revoker/README.md` for how to deploy it. The realm must store events: `eventsEnabled` with at least `UPDATE_CREDENTIAL`, `UPDATE_PASSWORD`, `DELETE_ACCOUNT` and `LOGOUT` in `enabledEventTypes`, `eventsExpiration` of at least a few days (the dev realm keeps 7), and `adminEventsEnabled`.
+Revocation never involves FxA. A user is cut off by revoking their sessions in Keycloak, which then refuses to refresh their tokens. `tools/keycloak_revoker` covers the cases Keycloak leaves half done: it polls the realm's stored events and calls the Keycloak admin API, and retires deleted users in the Tokenserver database. See `tools/keycloak_revoker/README.md` for how to deploy it. The realm must store events: `eventsEnabled` with at least `UPDATE_CREDENTIAL`, `UPDATE_PASSWORD` and `DELETE_ACCOUNT` in `enabledEventTypes`, `eventsExpiration` of at least a few days (the dev realm keeps 7), and `adminEventsEnabled`; the revoker checks this when it starts. The dev realm also stores `LOGOUT`, for auditing only: the revoker doesn't use it.
 
 | Case | Who cuts the sessions off |
 | --- | --- |
@@ -190,8 +190,10 @@ The revoker relies on event times: run NTP on the Keycloak nodes and the revoker
 Nothing is pushed to Tokenserver or the storage nodes. A client cut off this way keeps the access token and Sync token it already holds until they expire. The worst-case time from the event to losing access is:
 
 ```text
-revoker poll interval + Keycloak access-token lifespan + TOKEN_DURATION
+revoker poll interval + poll duration + Keycloak access-token lifespan + TOKEN_DURATION
 ```
+
+The poll duration is normally well under a second, but each of its Keycloak requests (two event queries, then a few per event acted on) may take up to `REVOKER_ATTEMPTS` × `REVOKER_TIMEOUT` plus 1 + 2 + 4 s of retry backoff with the defaults, and a poll that fails is repeated after another interval, up to `REVOKER_MAX_FAILURES` times before the revoker exits.
 
 We recommend a realm `accessTokenLifespan` of 300 s or less, and `SYNC_TOKENSERVER__TOKEN_DURATION` of 300–900 s rather than the default 3600. With the revoker's default 15 s poll, that is a cut-off within about 10–20 minutes. Shorter lifetimes mean more token refreshes and more Tokenserver requests from each client.
 

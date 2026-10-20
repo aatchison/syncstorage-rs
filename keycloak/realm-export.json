@@ -502,9 +502,7 @@
       "serviceAccountClientId": "keycloak-revoker",
       "disableableCredentialTypes": [],
       "requiredActions": [],
-      "realmRoles": [
-        "default-roles-sync"
-      ],
+      "realmRoles": [],
       "clientRoles": {
         "realm-management": [
           "view-events",
@@ -526,6 +524,17 @@
     }
   ],
   "clientScopeMappings": {
+    "realm-management": [
+      {
+        "client": "keycloak-revoker",
+        "roles": [
+          "view-events",
+          "view-users",
+          "manage-users",
+          "view-clients"
+        ]
+      }
+    ],
     "account": [
       {
         "client": "account-console",
@@ -824,7 +833,7 @@
         "backchannel.logout.revoke.offline.tokens": "false"
       },
       "authenticationFlowBindingOverrides": {},
-      "fullScopeAllowed": true,
+      "fullScopeAllowed": false,
       "nodeReRegistrationTimeout": -1,
       "defaultClientScopes": [
         "service_account",

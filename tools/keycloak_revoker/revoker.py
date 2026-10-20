@@ -705,6 +705,18 @@ class Revoker:
             for email in emails
             if email.endswith(suffix) and len(email) > len(suffix)
         ]
+        logger.info(
+            "reconcile: %d of %d active Tokenserver users have the "
+            "SYNC_TOKENSERVER__FXA_EMAIL_DOMAIN suffix",
+            len(user_ids),
+            len(emails),
+        )
+        if not user_ids:
+            logger.warning(
+                "reconcile: no active Tokenserver user has the "
+                "SYNC_TOKENSERVER__FXA_EMAIL_DOMAIN suffix; check that it is "
+                "the same as Tokenserver's"
+            )
         gone = [
             user_id for user_id in user_ids if not self.keycloak.user_exists(user_id)
         ]

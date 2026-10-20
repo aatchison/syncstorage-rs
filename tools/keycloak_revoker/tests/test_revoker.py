@@ -1017,6 +1017,30 @@ def test_reconcile_retires_users_gone_from_keycloak(tmp_path):
     assert h.revoker.reconcile() == 0
 
 
+def test_reconcile_logs_how_many_users_match_the_domain(tmp_path, caplog):
+    caplog.set_level(logging.INFO)
+    db = FakeDb(
+        [f"alice@{EMAIL_DOMAIN}", "frank@other.example.com", "gina@other.example"]
+    )
+    h = Harness(tmp_path, db=db)
+    assert h.revoker.reconcile() == 0
+    assert "1 of 3 active Tokenserver users have the" in caplog.text
+    assert "WARNING" not in caplog.text
+
+
+def test_reconcile_warns_when_no_user_matches_the_domain(tmp_path, caplog):
+    # SYNC_TOKENSERVER__FXA_EMAIL_DOMAIN differs from Tokenserver's
+    caplog.set_level(logging.INFO)
+    db = FakeDb(["alice@other.example.com", "bob@other.example.com"])
+    h = Harness(tmp_path, db=db)
+    assert h.revoker.reconcile() == 0
+    assert "0 of 2 active Tokenserver users have the" in caplog.text
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert len(warnings) == 1
+    assert "no active Tokenserver user has the" in warnings[0].getMessage()
+    assert db.retired == []
+
+
 def test_reconcile_refuses_an_empty_realm(tmp_path):
     db = FakeDb([f"alice@{EMAIL_DOMAIN}"])
     h = Harness(tmp_path, db=db)

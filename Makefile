@@ -64,6 +64,10 @@ clippy_spanner:
 	# Matches what's run in circleci
 	cargo clippy --workspace --all-targets --no-default-features --features=syncstorage-db/spanner --features=py_verifier -- -D clippy::dbg_macro -D warnings
 
+clippy_mysql_oidc:
+	# The OIDC (Keycloak) build: MySQL, native verifier (no py_verifier)
+	cargo clippy --workspace --all-targets --no-default-features --features=syncstorage-db/mysql -- -D clippy::dbg_macro -D warnings
+
 clippy_release_mysql:
 	# Release mode clippy — catches dead code and issues only visible with optimizations
 	cargo clippy --release --workspace --no-default-features --features=syncstorage-db/mysql --features=py_verifier -- -D warnings
@@ -316,6 +320,11 @@ postgres_test_with_coverage:
 		nextest --workspace --no-default-features --features=syncstorage-db/postgres --features=tokenserver-db/postgres --features=py_verifier --profile ${TEST_PROFILE}; exit_code=$$?
 	mv target/nextest/${TEST_PROFILE}/junit.xml ${UNIT_POSTGRES_JUNIT_XML}
 	exit $$exit_code
+
+# Build, lint and run every Rust and integration test for the OIDC (Keycloak) build.
+# Run keycloak/start-services.sh in the VM shell first; run this in the devcontainer.
+test_mysql_oidc_suite:
+	keycloak/run-suite.sh
 
 .ONESHELL:
 run_token_server_integration_tests:

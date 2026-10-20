@@ -8,6 +8,7 @@ Run unit tests for a specific database backend using one of the following make t
 - MySQL: `make test` or `make test_with_coverage`
 - Postgres: `make postgres_test_with_coverage`
 - Spanner: `make spanner_test_with_coverage`
+- MySQL with Keycloak (OIDC): `make clippy_mysql_oidc` lints that build, and `make test_mysql_oidc_suite` runs `keycloak/run-suite.sh` (build, lint, Rust and integration tests) after `keycloak/start-services.sh`
 
 These commands will run the Rust test suite using cargo-nextest and generate coverage reports using cargo-llvm-cov.
 

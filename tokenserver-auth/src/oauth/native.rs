@@ -5,12 +5,18 @@ use crate::crypto::JWTVerifyError;
 use async_trait::async_trait;
 use reqwest::Url;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
-use std::{borrow::Cow, time::Duration};
+use std::{
+    borrow::Cow,
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
 use syncserver_common::Metrics;
 use tokenserver_common::TokenserverError;
 use tokenserver_settings::{OAuthProvider, Settings};
 
 const SYNC_SCOPE: &str = "https://identity.mozilla.com/apps/oldsync";
+/// How far in the future an OIDC token's `nbf` may be, in seconds: the leeway jsonwebtoken
+/// allows on `exp` by default
+const OIDC_NBF_LEEWAY: i64 = 60;
 
 #[derive(Serialize, Deserialize, Debug)]
 struct TokenClaims {
@@ -57,6 +63,8 @@ struct OidcTokenClaims {
     aud: Audience,
     /// The client the token was issued to. Keycloak always sets it on access tokens.
     azp: Option<String>,
+    /// Not before, in seconds since the epoch. jsonwebtoken doesn't check it by default.
+    nbf: Option<i64>,
 }
 
 /// The `aud` claim: one audience or a list of them (RFC 7519, section 4.1.3)
@@ -103,6 +111,15 @@ impl OidcTokenClaims {
             .is_some_and(|azp| expected.allowed_clients.contains(&azp))
         {
             return Err(unauthorized_err_with_ctx("Unexpected OIDC token client"));
+        }
+        if let Some(nbf) = self.nbf {
+            let now = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map_err(internal_err_with_ctx)?
+                .as_secs() as i64;
+            if nbf > now + OIDC_NBF_LEEWAY {
+                return Err(unauthorized_err_with_ctx("OIDC token is not yet valid"));
+            }
         }
         Ok(VerifyOutput {
             fxa_uid: self.user,
@@ -977,6 +994,40 @@ mod tests {
         assert_eq!(err.status, "invalid-credentials");
         assert_eq!(err.http_status, 401);
         mock_jwks.assert_async().await;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_oidc_checks_nbf() -> Result<(), TokenserverError> {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+        let claims = |nbf: Option<i64>| {
+            let mut claims = json!({
+                "sub": "keycloak_user_id",
+                "azp": "thunderbird",
+                "scope": format!("openid {SYNC_SCOPE}"),
+                "iss": OIDC_ISSUER,
+                "aud": "tokenserver",
+            });
+            if let Some(nbf) = nbf {
+                claims["nbf"] = json!(nbf);
+            }
+            claims
+        };
+
+        // No nbf, a past one, or one within the leeway
+        for nbf in [None, Some(now - 3600), Some(now), Some(now + 30)] {
+            verify_oidc_claims(claims(nbf)).await?;
+        }
+        for nbf in [now + 120, now + 3600] {
+            let err = verify_oidc_claims(claims(Some(nbf))).await.unwrap_err();
+            assert_eq!(err.status, "invalid-credentials");
+            assert_eq!(err.http_status, 401);
+            assert_eq!(err.description, "Unauthorized");
+            assert_eq!(err.context, "OIDC token is not yet valid");
+        }
         Ok(())
     }
 

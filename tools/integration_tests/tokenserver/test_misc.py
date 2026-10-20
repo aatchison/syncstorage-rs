@@ -4,11 +4,11 @@
 """Miscellaneous integration tests for the tokenserver."""
 
 from integration_tests.tokenserver.helpers import (
+    FXA_EMAIL_DOMAIN,
     NODE_ID,
     add_user,
     build_oauth_headers,
     count_users,
-    default_email,
     get_replaced_users,
     get_user,
 )
@@ -82,11 +82,9 @@ def test_current_user_is_the_most_up_to_date(ts_ctx):
     add_user(db_conn, service_id, generation=1234, created_at=1235)
     uid = add_user(db_conn, service_id, generation=1236, created_at=1233)
     # Users are sorted by (generation, created_at), so the fourth user
-    # record is considered to be the current user. The generation and
-    # keys_changed_at are well above the stored values so the request is also
-    # valid when keys_changed_at stands in for the generation (Keycloak).
+    # record is considered to be the current user
     headers = build_oauth_headers(
-        generation=10000, keys_changed_at=10000, client_state="aaaa"
+        generation=1236, keys_changed_at=1234, client_state="aaaa"
     )
     res = app.get("/1.0/sync/1.5", headers=headers)
     assert res.json["uid"] == uid
@@ -148,7 +146,7 @@ def test_user_updates_with_new_client_state(ts_ctx):
     )
     # Send a request, updating the generation, keys_changed_at, and client_state
     headers = build_oauth_headers(
-        generation=10002, keys_changed_at=10002, client_state="bbbb"
+        generation=1235, keys_changed_at=1235, client_state="bbbb"
     )
     res = app.get("/1.0/sync/1.5", headers=headers)
     # A new user should have been created
@@ -157,8 +155,8 @@ def test_user_updates_with_new_client_state(ts_ctx):
     # The new user record should have the updated generation,
     # keys_changed_at, and client_state
     user = get_user(db_conn, res.json["uid"])
-    assert user["generation"] == 10002
-    assert user["keys_changed_at"] == 10002
+    assert user["generation"] == 1235
+    assert user["keys_changed_at"] == 1235
     assert user["client_state"] == "bbbb"
     # The old user record should not have the updated values
     user = get_user(db_conn, uid)
@@ -166,7 +164,7 @@ def test_user_updates_with_new_client_state(ts_ctx):
     assert user["keys_changed_at"] == 1234
     assert user["client_state"] == "aaaa"
     # Get all the replaced users
-    email = default_email()
+    email = f"test@{FXA_EMAIL_DOMAIN}"
     replaced_users = get_replaced_users(db_conn, service_id, email)
     # Only one user should be replaced
     assert len(replaced_users) == 1
@@ -208,7 +206,7 @@ def test_retired_users_can_make_requests(ts_ctx):
     # Add a retired user to the database
     add_user(db_conn, service_id, generation=MAX_GENERATION)
     headers = build_oauth_headers(
-        generation=10001, keys_changed_at=10001, client_state="aaaa"
+        generation=1235, keys_changed_at=1234, client_state="aaaa"
     )
     # Retired users cannot make requests with a generation smaller than
     # the max generation
@@ -221,9 +219,7 @@ def test_retired_users_can_make_requests(ts_ctx):
     # Retired users can make requests with a generation number equal to
     # the max generation
     headers = build_oauth_headers(
-        generation=MAX_GENERATION,
-        keys_changed_at=MAX_GENERATION,
-        client_state="aaaa",
+        generation=MAX_GENERATION, keys_changed_at=1234, client_state="aaaa"
     )
     app.get("/1.0/sync/1.5", headers=headers)
 

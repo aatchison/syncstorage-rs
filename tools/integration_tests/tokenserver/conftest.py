@@ -34,6 +34,8 @@ from integration_tests.tokenserver.helpers import (
     get_db_mode,
     get_expected_node_type,
     get_or_add_service,
+    is_using_oidc,
+    keycloak_e2e_auth,
     make_app,
 )
 
@@ -97,7 +99,14 @@ def fxa_auth():
     network round-trip to the FxA staging service plus email verification,
     which can take several seconds. One account is sufficient for all e2e
     tests in a single session.
+
+    When Tokenserver verifies OIDC tokens, the account is a Keycloak user
+    instead, and the tokens come from Keycloak.
     """
+    if is_using_oidc():
+        yield keycloak_e2e_auth()
+        return
+
     from fxa.core import Client
     from fxa.errors import ClientError, ServerError
     from fxa.oauth import Client as OAuthClient

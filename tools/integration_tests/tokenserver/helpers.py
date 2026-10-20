@@ -13,12 +13,12 @@ import functools
 import json
 import math
 import os
+import secrets
 import time
 import urllib.parse as urlparse
+import uuid
 from base64 import urlsafe_b64encode as b64encode
 
-import jwt
-import pytest
 import requests
 from sqlalchemy.sql import text as sqltext
 from tokenlib.utils import decode_token_bytes
@@ -52,60 +52,234 @@ def get_expected_node_type() -> str:
     return node_type
 
 
-# ── Keycloak (OIDC) helpers ───────────────────────────────────────────────────
+# ── Keycloak (OIDC) helpers ──────────────────────────────────────────────────
 #
-# When SYNC_TOKENSERVER__OAUTH_PROVIDER_TYPE is "oidc", the tests get real access
-# tokens from Keycloak with the client credentials grant instead of building fake FxA
-# tokens. The tokens belong to the client's service account, so every test acts as
-# that one user.
+# When SYNC_TOKENSERVER__OAUTH_PROVIDER is "oidc", Tokenserver only accepts real
+# access tokens signed by the OIDC provider, so the tests can't send the fake
+# tokens the mock FxA server echoes back. Instead, the helpers below mint a real
+# Keycloak token that carries the claims the test asks for:
+#   sub             the Keycloak user ID; test users are created with ID == `user`
+#   fxa-generation  the `generation`, from a user attribute via a protocol mapper
+#   scope           the requested scope (the oldsync scope by default)
+# Only how the credential is obtained differs; the requests and assertions are
+# the same as with FxA.
 # Settings:
-#   SYNC_TOKENSERVER__OIDC_ISSUER_URL  e.g. http://keycloak:7080/realms/sync
-#   KEYCLOAK_CLIENT_ID                 defaults to "confidential-client"
-#   KEYCLOAK_CLIENT_SECRET             the client's secret (required)
+#   SYNC_TOKENSERVER__OIDC_ISSUER_URL  e.g. http://localhost:7080/realms/sync
+#   KEYCLOAK_ADMIN_USERNAME            a master realm admin (default "admin")
+#   KEYCLOAK_ADMIN_PASSWORD            that admin's password (required)
+
+KEYCLOAK_TEST_CLIENT_ID = "tokenserver-tests"
+KEYCLOAK_BAD_SCOPE = "bad_scope"
+KEYCLOAK_GENERATION_ATTRIBUTE = "fxa-generation"
+# Test users only ever log in through these helpers, so one random password per
+# session is enough. It is never printed.
+_KEYCLOAK_USER_PASSWORD = secrets.token_urlsafe(24)
+_keycloak_admin_token: dict = {}
+_keycloak_users_ready: set = set()
 
 
-def is_using_keycloak() -> bool:
-    """Return True when the tests target an OIDC provider (Keycloak) instead of FxA."""
-    provider_type = os.environ.get("SYNC_TOKENSERVER__OAUTH_PROVIDER_TYPE", "fxa")
-    return provider_type.lower() == "oidc"
+def is_using_oidc() -> bool:
+    """Return True when Tokenserver verifies tokens from an OIDC provider (Keycloak)."""
+    return os.environ.get("SYNC_TOKENSERVER__OAUTH_PROVIDER", "fxa") == "oidc"
 
 
-def skip_if_keycloak(reason: str):
-    """Mark a test as FxA-only, so it is skipped when running against Keycloak."""
-    return pytest.mark.skipif(is_using_keycloak(), reason=reason)
-
-
-def get_keycloak_token() -> str:
-    """Request a new access token from Keycloak using the client credentials grant."""
+def _keycloak_issuer() -> tuple[str, str]:
+    """Split the issuer URL into the Keycloak base URL and the realm name."""
     issuer = os.environ["SYNC_TOKENSERVER__OIDC_ISSUER_URL"].rstrip("/")
-    response = requests.post(
-        f"{issuer}/protocol/openid-connect/token",
-        data={
-            "grant_type": "client_credentials",
-            "client_id": os.environ.get("KEYCLOAK_CLIENT_ID", "confidential-client"),
-            "client_secret": os.environ["KEYCLOAK_CLIENT_SECRET"],
-            "scope": f"openid {DEFAULT_OAUTH_SCOPE}",
-        },
+    base, realm = issuer.rsplit("/realms/", 1)
+    return base, realm
+
+
+def _keycloak_admin(method: str, path: str, **kwargs) -> requests.Response:
+    """Call the Keycloak admin API for the test realm."""
+    base, realm = _keycloak_issuer()
+    if _keycloak_admin_token.get("expires_at", 0) < time.time() + 10:
+        res = requests.post(
+            f"{base}/realms/master/protocol/openid-connect/token",
+            data={
+                "grant_type": "password",
+                "client_id": "admin-cli",
+                "username": os.environ.get("KEYCLOAK_ADMIN_USERNAME", "admin"),
+                "password": os.environ["KEYCLOAK_ADMIN_PASSWORD"],
+            },
+            timeout=10,
+        )
+        res.raise_for_status()
+        body = res.json()
+        _keycloak_admin_token["token"] = body["access_token"]
+        _keycloak_admin_token["expires_at"] = time.time() + body["expires_in"]
+    headers = {"Authorization": f"Bearer {_keycloak_admin_token['token']}"}
+    return requests.request(
+        method,
+        f"{base}/admin/realms/{realm}{path}",
+        headers=headers,
         timeout=10,
+        **kwargs,
     )
-    response.raise_for_status()
-    token: str = response.json()["access_token"]
-    return token
 
 
 @functools.lru_cache(maxsize=None)
-def keycloak_subject() -> str:
-    """Return the "sub" claim of the Keycloak service account's tokens."""
-    # Tokenserver verifies the signature; the tests only need to read the claim.
-    claims = jwt.decode(get_keycloak_token(), options={"verify_signature": False})
-    subject: str = claims["sub"]
-    return subject
+def _setup_keycloak_realm() -> None:
+    """Add what the tests need to the realm: a test client and attribute permissions.
+
+    The test client is a public client with direct password grants, whose access
+    tokens are RFC 9068 tokens (typ at+jwt) carrying the user's generation
+    attribute as the fxa-generation claim. The oldsync scope (whose audience
+    mapper adds Tokenserver's audience) and a bad scope are optional scopes, so a
+    token only has the scope the test asks for.
+    """
+    # Let admins set the generation attribute, which isn't in the user profile
+    profile = _keycloak_admin("GET", "/users/profile")
+    profile.raise_for_status()
+    config = profile.json()
+    if config.get("unmanagedAttributePolicy") != "ADMIN_EDIT":
+        config["unmanagedAttributePolicy"] = "ADMIN_EDIT"
+        _keycloak_admin("PUT", "/users/profile", json=config).raise_for_status()
+
+    res = _keycloak_admin(
+        "POST",
+        "/client-scopes",
+        json={
+            "name": KEYCLOAK_BAD_SCOPE,
+            "protocol": "openid-connect",
+            "attributes": {"include.in.token.scope": "true"},
+        },
+    )
+    if res.status_code != 409:
+        res.raise_for_status()
+
+    res = _keycloak_admin(
+        "POST",
+        "/clients",
+        json={
+            "clientId": KEYCLOAK_TEST_CLIENT_ID,
+            "protocol": "openid-connect",
+            "publicClient": True,
+            "standardFlowEnabled": False,
+            "directAccessGrantsEnabled": True,
+            "fullScopeAllowed": False,
+            "attributes": {"access.token.header.type.rfc9068": "true"},
+            "defaultClientScopes": ["basic"],
+            "optionalClientScopes": [DEFAULT_OAUTH_SCOPE, KEYCLOAK_BAD_SCOPE],
+            "protocolMappers": [
+                {
+                    "name": KEYCLOAK_GENERATION_ATTRIBUTE,
+                    "protocol": "openid-connect",
+                    "protocolMapper": "oidc-usermodel-attribute-mapper",
+                    "config": {
+                        "user.attribute": KEYCLOAK_GENERATION_ATTRIBUTE,
+                        "claim.name": KEYCLOAK_GENERATION_ATTRIBUTE,
+                        "jsonType.label": "long",
+                        "access.token.claim": "true",
+                        "id.token.claim": "false",
+                        "userinfo.token.claim": "false",
+                        "introspection.token.claim": "true",
+                    },
+                }
+            ],
+        },
+    )
+    if res.status_code != 409:
+        res.raise_for_status()
 
 
-def default_email() -> str:
-    """Return the email Tokenserver derives for the default test user."""
-    user = keycloak_subject() if is_using_keycloak() else "test"
-    return f"{user}@{FXA_EMAIL_DOMAIN}"
+def _keycloak_user(user: str) -> dict:
+    """Create (or reset) the Keycloak user whose ID, and so token subject, is `user`."""
+    _setup_keycloak_realm()
+    if user not in _keycloak_users_ready:
+        # The admin API ignores the ID on create, but a partial import keeps it
+        res = _keycloak_admin(
+            "POST",
+            "/partialImport",
+            json={
+                "ifResourceExists": "SKIP",
+                "users": [
+                    {
+                        "id": user,
+                        "username": user,
+                        "email": f"{user}@example.com",
+                        "emailVerified": True,
+                        "firstName": "Sync",
+                        "lastName": "Test",
+                        "enabled": True,
+                    }
+                ],
+            },
+        )
+        res.raise_for_status()
+        _keycloak_admin(
+            "PUT",
+            f"/users/{user}/reset-password",
+            json={
+                "type": "password",
+                "value": _KEYCLOAK_USER_PASSWORD,
+                "temporary": False,
+            },
+        ).raise_for_status()
+        _keycloak_users_ready.add(user)
+    res = _keycloak_admin("GET", f"/users/{user}")
+    res.raise_for_status()
+    rep: dict = res.json()
+    return rep
+
+
+def get_keycloak_token(
+    user: str = "test",
+    generation: int | None = None,
+    scope: str = DEFAULT_OAUTH_SCOPE,
+) -> str:
+    """Mint a real Keycloak access token for `user` with the given generation and scope."""
+    rep = _keycloak_user(user)
+    attributes = rep.get("attributes") or {}
+    if generation is None:
+        attributes.pop(KEYCLOAK_GENERATION_ATTRIBUTE, None)
+    else:
+        attributes[KEYCLOAK_GENERATION_ATTRIBUTE] = [str(generation)]
+    rep["attributes"] = attributes
+    _keycloak_admin("PUT", f"/users/{user}", json=rep).raise_for_status()
+
+    base, realm = _keycloak_issuer()
+    res = requests.post(
+        f"{base}/realms/{realm}/protocol/openid-connect/token",
+        data={
+            "grant_type": "password",
+            "client_id": KEYCLOAK_TEST_CLIENT_ID,
+            "username": user,
+            "password": _KEYCLOAK_USER_PASSWORD,
+            "scope": scope,
+        },
+        timeout=10,
+    )
+    res.raise_for_status()
+    token: str = res.json()["access_token"]
+    return token
+
+
+class KeycloakSession:
+    """Stands in for a PyFxA session in test_e2e.py: a user with a `uid`."""
+
+    def __init__(self, uid: str):
+        """Wrap the Keycloak user ID."""
+        self.uid = uid
+
+
+class KeycloakOAuthClient:
+    """Stands in for PyFxA's OAuth client in test_e2e.py."""
+
+    def authorize_token(self, session: KeycloakSession, scope: str) -> str:
+        """Mint a Keycloak access token for the session's user with only `scope`."""
+        return get_keycloak_token(user=session.uid, scope=scope)
+
+
+def keycloak_e2e_auth() -> dict:
+    """Return the same keys test_e2e.py uses from the FxA account fixture."""
+    session = KeycloakSession(str(uuid.uuid4()))
+    oauth_client = KeycloakOAuthClient()
+    return {
+        "session": session,
+        "oauth_client": oauth_client,
+        "oauth_token": oauth_client.authorize_token(session, DEFAULT_OAUTH_SCOPE),
+    }
 
 
 # ── SQL helpers ───────────────────────────────────────────────────────────────
@@ -247,7 +421,7 @@ def add_user(
     created_at = created_at or math.trunc(time.time() * 1000)
     params = {
         "service": service_id,
-        "email": email or default_email(),
+        "email": email or f"test@{FXA_EMAIL_DOMAIN}",
         "nodeid": nodeid,
         "generation": generation,
         "keys_changed_at": keys_changed_at,
@@ -374,13 +548,15 @@ def build_oauth_headers(
     status: int = 200,
     **additional_headers: str,
 ) -> dict:
-    """Build OAuth Bearer + X-KeyID headers for a test request.
-
-    Against Keycloak, the Bearer token is a real access token for the service
-    account, so `generation`, `user` and `status` have no effect.
-    """
-    if is_using_keycloak():
-        headers = {"Authorization": f"Bearer {get_keycloak_token()}"}
+    """Build OAuth Bearer + X-KeyID headers for a test request."""
+    if is_using_oidc():
+        # A real token from Keycloak; see the Keycloak helpers above
+        if status != 200:
+            raise ValueError(
+                "Keycloak can't be told to fail verification with a status"
+            )
+        token = get_keycloak_token(user=user, generation=generation)
+        headers = {"Authorization": f"Bearer {token}"}
         client_state_bytes = binascii.unhexlify(client_state or "")
         client_state_b64 = b64encode(client_state_bytes).strip(b"=").decode("utf-8")
         headers["X-KeyID"] = f"{keys_changed_at}-{client_state_b64}"

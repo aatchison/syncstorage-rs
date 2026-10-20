@@ -163,7 +163,7 @@ docker_run_mysql_e2e_tests:
 		down -v --remove-orphans
 	exit $$exit_code
 
-# Needs KEYCLOAK_CLIENT_SECRET; see docker/docker-compose.e2e.mysql.keycloak.yaml.
+# Needs KEYCLOAK_ADMIN_PASSWORD; see docker/docker-compose.e2e.mysql.keycloak.yaml.
 .ONESHELL:
 docker_run_mysql_keycloak_e2e_tests:
 	exit_code=0

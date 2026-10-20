@@ -54,6 +54,10 @@ pub struct Settings {
     /// The audience Tokenserver expects in OIDC access tokens. Required when `oauth_provider`
     /// is "oidc": tokens whose `aud` does not include it are rejected.
     pub oidc_audience: Option<String>,
+    /// The OIDC client IDs whose access tokens are accepted. Required when `oauth_provider` is
+    /// "oidc": tokens whose `azp` is not in this list are rejected. From the environment, a
+    /// comma-separated list.
+    pub oidc_allowed_clients: Vec<String>,
     /// The JWK to be used to verify OAuth tokens. Passing a JWK to the PyFxA Python library
     /// prevents it from making an external API call to FxA to get the JWK, yielding substantial
     /// performance benefits. This value should match that on the `/v1/jwks` endpoint on the FxA
@@ -121,6 +125,7 @@ impl Default for Settings {
             oauth_provider: OAuthProvider::default(),
             oidc_issuer_url: None,
             oidc_audience: None,
+            oidc_allowed_clients: Vec::new(),
             fxa_oauth_primary_jwk: None,
             fxa_oauth_secondary_jwk: None,
             node_capacity_release_rate: None,

@@ -88,6 +88,7 @@ impl Settings {
                 // commas are untouched.
                 .list_separator(",")
                 .with_list_parse_key("syncstorage.gcs_payload_offload_collections")
+                .with_list_parse_key("tokenserver.oidc_allowed_clients")
                 .try_parsing(true),
         );
         let settings: Config = builder.build()?;
@@ -273,6 +274,19 @@ impl Settings {
                         .to_owned(),
                 ));
             }
+            if self.tokenserver.oidc_allowed_clients.is_empty()
+                || self
+                    .tokenserver
+                    .oidc_allowed_clients
+                    .iter()
+                    .any(String::is_empty)
+            {
+                return Err(ConfigError::Message(
+                    "SYNC_TOKENSERVER__OIDC_ALLOWED_CLIENTS must be set, with no empty \
+                     client IDs, when SYNC_TOKENSERVER__OAUTH_PROVIDER is \"oidc\""
+                        .to_owned(),
+                ));
+            }
             // The FxA webhook would act on OIDC users, and the FxA JWKs would replace the
             // provider's keys.
             if self.tokenserver.fxa_webhook_enabled {
@@ -294,12 +308,14 @@ impl Settings {
             }
         } else if self.tokenserver.enabled
             && (self.tokenserver.oidc_issuer_url.is_some()
-                || self.tokenserver.oidc_audience.is_some())
+                || self.tokenserver.oidc_audience.is_some()
+                || !self.tokenserver.oidc_allowed_clients.is_empty())
         {
             // Otherwise a missing oauth_provider would silently verify tokens against FxA.
             return Err(ConfigError::Message(
-                "SYNC_TOKENSERVER__OIDC_ISSUER_URL and SYNC_TOKENSERVER__OIDC_AUDIENCE \
-                 require SYNC_TOKENSERVER__OAUTH_PROVIDER to be \"oidc\""
+                "SYNC_TOKENSERVER__OIDC_ISSUER_URL, SYNC_TOKENSERVER__OIDC_AUDIENCE and \
+                 SYNC_TOKENSERVER__OIDC_ALLOWED_CLIENTS require \
+                 SYNC_TOKENSERVER__OAUTH_PROVIDER to be \"oidc\""
                     .to_owned(),
             ));
         }
@@ -739,6 +755,10 @@ mod test {
                 ("SYNC_TOKENSERVER__OAUTH_PROVIDER", Some("oidc")),
                 ("SYNC_TOKENSERVER__OIDC_ISSUER_URL", issuer),
                 ("SYNC_TOKENSERVER__OIDC_AUDIENCE", audience),
+                (
+                    "SYNC_TOKENSERVER__OIDC_ALLOWED_CLIENTS",
+                    Some("thunderbird"),
+                ),
             ]
         };
         temp_env::with_vars(vars(None, Some("syncserver")), || {
@@ -798,6 +818,7 @@ mod test {
         provider: Option<&'static str>,
         issuer: Option<&'static str>,
         audience: Option<&'static str>,
+        allowed_clients: Option<&'static str>,
         extra: &[(&'static str, Option<&'static str>)],
     ) -> Vec<(&'static str, Option<&'static str>)> {
         let mut vars = vec![
@@ -813,6 +834,7 @@ mod test {
             ("SYNC_TOKENSERVER__OAUTH_PROVIDER", provider),
             ("SYNC_TOKENSERVER__OIDC_ISSUER_URL", issuer),
             ("SYNC_TOKENSERVER__OIDC_AUDIENCE", audience),
+            ("SYNC_TOKENSERVER__OIDC_ALLOWED_CLIENTS", allowed_clients),
             ("SYNC_TOKENSERVER__FXA_WEBHOOK_ENABLED", None),
             ("SYNC_TOKENSERVER__FXA_OAUTH_PRIMARY_JWK__KTY", None),
             ("SYNC_TOKENSERVER__FXA_OAUTH_PRIMARY_JWK__N", None),
@@ -834,6 +856,7 @@ mod test {
                 Some("oidc"),
                 Some(OIDC_TEST_ISSUER),
                 Some("tokenserver"),
+                Some("thunderbird"),
                 &[("SYNC_TOKENSERVER__FXA_WEBHOOK_ENABLED", Some("true"))],
             ),
             || {
@@ -866,6 +889,7 @@ mod test {
                     Some("oidc"),
                     Some(OIDC_TEST_ISSUER),
                     Some("tokenserver"),
+                    Some("thunderbird"),
                     &[(kty, Some("RSA")), (n, Some("AQAB")), (e, Some("AQAB"))],
                 ),
                 || {
@@ -881,13 +905,58 @@ mod test {
     }
 
     #[test]
+    fn test_oidc_provider_requires_allowed_clients() {
+        for allowed_clients in [None, Some(""), Some("thunderbird,")] {
+            let vars = oidc_vars(
+                Some("oidc"),
+                Some(OIDC_TEST_ISSUER),
+                Some("tokenserver"),
+                allowed_clients,
+                &[],
+            );
+            temp_env::with_vars(vars, || {
+                let err = Settings::with_env_and_config_file(None).expect_err(
+                    "an OIDC provider with no or empty allowed clients should fail validation",
+                );
+                assert!(
+                    err.to_string()
+                        .contains("SYNC_TOKENSERVER__OIDC_ALLOWED_CLIENTS")
+                );
+            });
+        }
+        let vars = oidc_vars(
+            Some("oidc"),
+            Some(OIDC_TEST_ISSUER),
+            Some("tokenserver"),
+            Some("thunderbird,tokenserver-tests"),
+            &[],
+        );
+        temp_env::with_vars(vars, || {
+            let settings = Settings::with_env_and_config_file(None)
+                .expect("an OIDC provider with allowed clients should validate");
+            assert_eq!(
+                settings.tokenserver.oidc_allowed_clients,
+                vec!["thunderbird".to_owned(), "tokenserver-tests".to_owned()]
+            );
+        });
+    }
+
+    #[test]
     fn test_oidc_settings_require_oidc_provider() {
-        for (provider, issuer, audience) in [
-            (None, Some(OIDC_TEST_ISSUER), None),
-            (Some("fxa"), None, Some("tokenserver")),
-            (Some("fxa"), Some(OIDC_TEST_ISSUER), Some("tokenserver")),
+        for (provider, issuer, audience, allowed_clients) in [
+            (None, Some(OIDC_TEST_ISSUER), None, None),
+            (Some("fxa"), None, Some("tokenserver"), None),
+            (
+                Some("fxa"),
+                Some(OIDC_TEST_ISSUER),
+                Some("tokenserver"),
+                None,
+            ),
+            (None, None, None, Some("thunderbird")),
+            (Some("fxa"), None, None, Some("thunderbird")),
         ] {
-            temp_env::with_vars(oidc_vars(provider, issuer, audience, &[]), || {
+            let vars = oidc_vars(provider, issuer, audience, allowed_clients, &[]);
+            temp_env::with_vars(vars, || {
                 let err = Settings::with_env_and_config_file(None)
                     .expect_err("OIDC settings without the OIDC provider should fail validation");
                 assert!(
@@ -897,7 +966,7 @@ mod test {
             });
         }
         // FxA mode without OIDC settings is unaffected
-        temp_env::with_vars(oidc_vars(None, None, None, &[]), || {
+        temp_env::with_vars(oidc_vars(None, None, None, None, &[]), || {
             let settings = Settings::with_env_and_config_file(None)
                 .expect("FxA mode without OIDC settings should validate");
             assert_eq!(settings.tokenserver.oauth_provider, OAuthProvider::Fxa);

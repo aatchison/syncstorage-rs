@@ -55,6 +55,8 @@ struct OidcTokenClaims {
     generation: Option<i64>,
     iss: String,
     aud: Audience,
+    /// The client the token was issued to. Keycloak always sets it on access tokens.
+    azp: Option<String>,
 }
 
 /// The `aud` claim: one audience or a list of them (RFC 7519, section 4.1.3)
@@ -74,11 +76,13 @@ impl Audience {
     }
 }
 
-/// The issuer and audience an OIDC access token must name (RFC 9068, section 4)
+/// The issuer and audience an OIDC access token must name (RFC 9068, section 4), and the
+/// clients it may be issued to
 #[derive(Clone)]
 struct OidcExpected {
     issuer: String,
     audience: String,
+    allowed_clients: Vec<String>,
 }
 
 impl OidcTokenClaims {
@@ -93,6 +97,12 @@ impl OidcTokenClaims {
         }
         if !self.aud.contains(&expected.audience) {
             return Err(unauthorized_err_with_ctx("Unexpected OIDC token audience"));
+        }
+        if !self
+            .azp
+            .is_some_and(|azp| expected.allowed_clients.contains(&azp))
+        {
+            return Err(unauthorized_err_with_ctx("Unexpected OIDC token client"));
         }
         Ok(VerifyOutput {
             fxa_uid: self.user,
@@ -128,6 +138,13 @@ where
                 .ok_or_else(|| {
                     internal_err_with_ctx("oauth_provider is \"oidc\" but oidc_audience is not set")
                 })?;
+            if settings.oidc_allowed_clients.is_empty()
+                || settings.oidc_allowed_clients.iter().any(String::is_empty)
+            {
+                return Err(internal_err_with_ctx(
+                    "oauth_provider is \"oidc\" but oidc_allowed_clients is not set",
+                ));
+            }
             // Make sure the issuer path ends in "/" so that `join` appends to it instead of
             // replacing its last segment (e.g. ".../realms/sync").
             let base_url = Url::parse(&format!("{}/", issuer.trim_end_matches('/')))
@@ -138,6 +155,7 @@ where
             let expected = OidcExpected {
                 issuer: issuer.to_owned(),
                 audience: audience.to_owned(),
+                allowed_clients: settings.oidc_allowed_clients.clone(),
             };
             // OIDC providers have no verify endpoint, so this URL is never requested
             (base_url, jwks_url, Some(expected))
@@ -687,6 +705,7 @@ mod tests {
             // Nothing listens here; these tests must not make any requests
             oidc_issuer_url: Some(OIDC_ISSUER.to_owned()),
             oidc_audience: Some("tokenserver".to_owned()),
+            oidc_allowed_clients: vec!["thunderbird".to_owned(), "tokenserver-tests".to_owned()],
             ..Settings::default()
         }
     }
@@ -733,6 +752,41 @@ mod tests {
             };
             assert!(Verifier::<MockJWTVerifier>::new(&settings, vec![]).is_err());
         }
+        for oidc_allowed_clients in [vec![], vec![String::new()]] {
+            let settings = Settings {
+                oidc_allowed_clients,
+                ..oidc_settings()
+            };
+            assert!(Verifier::<MockJWTVerifier>::new(&settings, vec![]).is_err());
+        }
+    }
+
+    #[tokio::test]
+    async fn test_oidc_checks_client() -> Result<(), TokenserverError> {
+        let claims = |azp: Option<&str>| {
+            let mut claims = json!({
+                "sub": "keycloak_user_id",
+                "scope": format!("openid {SYNC_SCOPE}"),
+                "iss": OIDC_ISSUER,
+                "aud": "tokenserver",
+            });
+            if let Some(azp) = azp {
+                claims["azp"] = json!(azp);
+            }
+            claims
+        };
+
+        for azp in ["thunderbird", "tokenserver-tests"] {
+            verify_oidc_claims(claims(Some(azp))).await?;
+        }
+        for azp in [Some("public-client"), Some(""), None] {
+            let err = verify_oidc_claims(claims(azp)).await.unwrap_err();
+            assert_eq!(err.status, "invalid-credentials");
+            assert_eq!(err.http_status, 401);
+            assert_eq!(err.description, "Unauthorized");
+            assert_eq!(err.context, "Unexpected OIDC token client");
+        }
+        Ok(())
     }
 
     #[tokio::test]
@@ -740,6 +794,7 @@ mod tests {
         let claims = |iss: serde_json::Value, aud: serde_json::Value| {
             let mut claims = json!({
                 "sub": "keycloak_user_id",
+                "azp": "thunderbird",
                 "scope": format!("openid {SYNC_SCOPE}"),
             });
             if !iss.is_null() {
@@ -825,6 +880,7 @@ mod tests {
             };
             let claims = json!({
                 "sub": "keycloak_user_id",
+                "azp": "thunderbird",
                 "scope": format!("openid {SYNC_SCOPE}"),
                 "iss": OIDC_ISSUER,
                 "aud": ["account", "tokenserver"],
@@ -928,6 +984,7 @@ mod tests {
     async fn test_oidc_generation_comes_only_from_fxa_generation() -> Result<(), TokenserverError> {
         let res = verify_oidc_claims(json!({
             "sub": "keycloak_user_id",
+            "azp": "thunderbird",
             "scope": format!("openid {SYNC_SCOPE}"),
             "fxa-generation": 1234,
             "iat": 1_700_000_000,
@@ -941,6 +998,7 @@ mod tests {
         // Without the claim there is no generation; `iat` and `generation` don't stand in
         let res = verify_oidc_claims(json!({
             "sub": "keycloak_user_id",
+            "azp": "thunderbird",
             "scope": format!("openid {SYNC_SCOPE}"),
             "iat": 1_700_000_000,
             "generation": 1234,
@@ -962,6 +1020,7 @@ mod tests {
         ] {
             let mut claims = json!({
                 "sub": "keycloak_user_id",
+                "azp": "thunderbird",
                 "iss": OIDC_ISSUER,
                 "aud": "tokenserver",
             });

@@ -148,9 +148,10 @@ would silently drop the payload.
 | <span id="SYNC_TOKENSERVER__FXA_OAUTH_PRIMARY_JWK__N"></span>SYNC_TOKENSERVER__FXA_OAUTH_PRIMARY_JWK__N | None | Primary JWK modulus (RSA public key component) |
 | <span id="SYNC_TOKENSERVER__FXA_OAUTH_PRIMARY_JWK__E"></span>SYNC_TOKENSERVER__FXA_OAUTH_PRIMARY_JWK__E | None | Primary JWK exponent (RSA public key component) |
 | <span id="SYNC_TOKENSERVER__FXA_OAUTH_SECONDARY_JWK"></span>SYNC_TOKENSERVER__FXA_OAUTH_SECONDARY_JWK__* | None | Secondary JWK (same structure as primary) |
-| <span id="SYNC_TOKENSERVER__OAUTH_PROVIDER"></span>SYNC_TOKENSERVER__OAUTH_PROVIDER | fxa | Identity provider: `fxa` or `oidc` (a generic OpenID Connect provider such as Keycloak). `oidc` needs a build without `py_verifier`, never falls back to FxA's `/v1/verify`, and requires `OIDC_ISSUER_URL` and `OIDC_AUDIENCE` |
+| <span id="SYNC_TOKENSERVER__OAUTH_PROVIDER"></span>SYNC_TOKENSERVER__OAUTH_PROVIDER | fxa | Identity provider: `fxa` or `oidc` (a generic OpenID Connect provider such as Keycloak). `oidc` needs a build without `py_verifier`, never falls back to FxA's `/v1/verify`, and requires `OIDC_ISSUER_URL`, `OIDC_AUDIENCE` and `OIDC_ALLOWED_CLIENTS` |
 | <span id="SYNC_TOKENSERVER__OIDC_ISSUER_URL"></span>SYNC_TOKENSERVER__OIDC_ISSUER_URL | None | OIDC issuer URL, e.g. `http://keycloak:7080/realms/sync`. Tokens must carry it as `iss`; keys come from `{OIDC_ISSUER_URL}/protocol/openid-connect/certs` |
 | <span id="SYNC_TOKENSERVER__OIDC_AUDIENCE"></span>SYNC_TOKENSERVER__OIDC_AUDIENCE | None | Audience that OIDC access tokens must include in `aud` |
+| <span id="SYNC_TOKENSERVER__OIDC_ALLOWED_CLIENTS"></span>SYNC_TOKENSERVER__OIDC_ALLOWED_CLIENTS | None | Comma-separated client IDs (a list in a TOML config file) whose OIDC access tokens are accepted, matched exactly against `azp` |
 
 #### OIDC mode (Keycloak)
 
@@ -159,13 +160,14 @@ With `OAUTH_PROVIDER=oidc`, Tokenserver accepts an access token only if it is:
 - an RFC 9068 access token, with header `typ: at+jwt` (Keycloak client option `access.token.header.type.rfc9068`), signed with RS256 and carrying an unexpired `exp`
 - issued by `iss` equal to `OIDC_ISSUER_URL` (a trailing `/` is ignored)
 - for an `aud` that contains `OIDC_AUDIENCE` (in Keycloak, an audience mapper)
+- issued to a client listed in `OIDC_ALLOWED_CLIENTS`, as `azp` (a token without `azp` is rejected)
 - granted the `https://identity.mozilla.com/apps/oldsync` scope, in a space-separated `scope`
 
 An optional `fxa-generation` claim is used as the user's generation. It must be a JSON number (Keycloak mapper `jsonType` `long`) in milliseconds since the epoch, must never decrease, and must never be lower than any `keys_changed_at` the client has sent. Without it there is no generation-based revocation: a revoked user keeps access for at most the access-token lifetime plus `TOKEN_DURATION`.
 
 The signing keys are fetched from `{OIDC_ISSUER_URL}/protocol/openid-connect/certs` on every request, with no cache. If that fetch fails, Tokenserver returns 503; tokens that the fetched keys don't verify get 401.
 
-Of the FxA settings above, these still apply: `FXA_EMAIL_DOMAIN` (users are keyed as `<sub>@<FXA_EMAIL_DOMAIN>`), `FXA_METRICS_HASH_SECRET`, and `FXA_OAUTH_REQUEST_TIMEOUT` (the JWKS request timeout). Startup fails if `FXA_WEBHOOK_ENABLED`, `FXA_OAUTH_PRIMARY_JWK` or `FXA_OAUTH_SECONDARY_JWK` is set in OIDC mode (so Keycloak keys can't be pinned through them), or if `OIDC_ISSUER_URL` or `OIDC_AUDIENCE` is set without `OAUTH_PROVIDER=oidc`.
+Of the FxA settings above, these still apply: `FXA_EMAIL_DOMAIN` (users are keyed as `<sub>@<FXA_EMAIL_DOMAIN>`), `FXA_METRICS_HASH_SECRET`, and `FXA_OAUTH_REQUEST_TIMEOUT` (the JWKS request timeout). Startup fails if `FXA_WEBHOOK_ENABLED`, `FXA_OAUTH_PRIMARY_JWK` or `FXA_OAUTH_SECONDARY_JWK` is set in OIDC mode (so Keycloak keys can't be pinned through them), or if `OIDC_ISSUER_URL`, `OIDC_AUDIENCE` or `OIDC_ALLOWED_CLIENTS` is set without `OAUTH_PROVIDER=oidc`.
 
 `keycloak/realm-export.json` is a realm for local development only; don't use it in a deployment.
 

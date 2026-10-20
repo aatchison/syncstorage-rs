@@ -116,6 +116,8 @@ main() {
     export SYNC_TOKENSERVER__OAUTH_PROVIDER=oidc
     export SYNC_TOKENSERVER__OIDC_ISSUER_URL=http://localhost:7080/realms/sync
     export SYNC_TOKENSERVER__OIDC_AUDIENCE=tokenserver
+    # The client tools/integration_tests/tokenserver/helpers.py mints tokens through
+    export SYNC_TOKENSERVER__OIDC_ALLOWED_CLIENTS=tokenserver-tests
     export SYNC_SERVER_URL=http://localhost:8000
     export TOKENSERVER_HOST=http://localhost:8000
     export KEYCLOAK_ADMIN_USERNAME=admin

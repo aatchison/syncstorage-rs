@@ -46,10 +46,13 @@ tokenserver.fxa_metrics_hash_secret = "INSERT_SECRET_KEY_HERE"
 
 # Verify tokens from Keycloak (a generic OIDC provider) instead of FxA. Keys are
 # fetched from {oidc_issuer_url}/protocol/openid-connect/certs, and tokens must
-# carry oidc_issuer_url as `iss`, oidc_audience in `aud`, and the oldsync scope.
+# carry oidc_issuer_url as `iss`, oidc_audience in `aud`, one of
+# oidc_allowed_clients as `azp`, and the oldsync scope.
 tokenserver.oauth_provider = "oidc"
 tokenserver.oidc_issuer_url = "http://localhost:7080/realms/sync"
 tokenserver.oidc_audience = "tokenserver"
+# The realm's client with the oldsync scope.
+tokenserver.oidc_allowed_clients = ["public-client"]
 
 # -----------------------------------------------------------------------------
 # CORS (optional)

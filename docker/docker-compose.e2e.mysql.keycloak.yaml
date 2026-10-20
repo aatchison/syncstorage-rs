@@ -41,6 +41,8 @@ services:
       SYNC_TOKENSERVER__OAUTH_PROVIDER: oidc
       SYNC_TOKENSERVER__OIDC_ISSUER_URL: http://keycloak:7080/realms/sync
       SYNC_TOKENSERVER__OIDC_AUDIENCE: tokenserver
+      # The test client created by tools/integration_tests/tokenserver/helpers.py
+      SYNC_TOKENSERVER__OIDC_ALLOWED_CLIENTS: tokenserver-tests
       RUST_BACKTRACE: 1
 
   e2e-tests:

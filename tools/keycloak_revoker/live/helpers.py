@@ -67,8 +67,8 @@ class KeycloakAdmin:
         )
 
 
-def run_revoker(env: Mapping[str, str], *args: str) -> str:
-    """Run revoker.py once with `args`; fail the test if it fails."""
+def run_revoker(env: Mapping[str, str], *args: str, status: int = 0) -> str:
+    """Run revoker.py once with `args`; fail the test unless it exits `status`."""
     proc = subprocess.run(
         [sys.executable, REVOKER, *args],
         env=env,
@@ -78,7 +78,9 @@ def run_revoker(env: Mapping[str, str], *args: str) -> str:
     )
     # The revoker logs Keycloak user IDs only, so its output can be shown
     sys.stderr.write(proc.stderr)
-    assert proc.returncode == 0, f"revoker {' '.join(args)} exited {proc.returncode}"
+    assert proc.returncode == status, (
+        f"revoker {' '.join(args)} exited {proc.returncode}"
+    )
     return proc.stderr
 
 

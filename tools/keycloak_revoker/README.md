@@ -20,8 +20,13 @@ Keycloak has no webhook, so the revoker polls the realm's stored events
 `UPDATE_CREDENTIAL` is acted on for any credential type, so adding or changing
 an OTP device also ends the user's sessions.
 
-A 404 from Keycloak (the user, or their offline session, is already gone) counts
-as done. A 5xx response or a network error is retried with exponential backoff;
+Before the first poll the revoker looks up every client in
+`REVOKER_OFFLINE_CLIENTS` (`GET /clients?clientId=`) and exits if one isn't in
+the realm: revoking the consent of a client that doesn't exist revokes nothing.
+Keycloak's own 404s for a user who no longer exists (`User not found`) or has no
+consent or offline session for the client (`Consent nor offline token not
+found`) count as done; any other 404, including `Client not found`, fails the
+poll. A 5xx response or a network error is retried with exponential backoff;
 if it persists, the poll fails and the cursor stays where it was, so the next
 poll handles the same events again. Every action can safely be repeated.
 
@@ -94,8 +99,11 @@ The realm must store events:
 
 The revoker authenticates as the service account of a confidential client with
 only the client-credentials grant, whose service account has the
-`realm-management` roles `view-events`, `view-users` and `manage-users`. The dev
-realm, `keycloak/realm-export.json`, has such a client, `keycloak-revoker`,
+`realm-management` roles `view-events`, `view-users`, `manage-users` and
+`view-clients`. `view-clients` is for the startup lookup of the offline clients:
+with `query-clients` alone Keycloak 26.2 answers that lookup with an empty list.
+It also lets the account read every client's configuration, secrets included.
+The dev realm, `keycloak/realm-export.json`, has such a client, `keycloak-revoker`,
 without a secret: `keycloak/start-services.sh` generates one into
 `/tmp/syncstorage-test-secrets/keycloak-revoker-secret`.
 

@@ -136,3 +136,15 @@ def test_reconcile_retires_user_deleted_while_revoker_was_down(
     output = run_revoker(env, "--reconcile", "--force")
     assert f"reconcile: retired keycloak user {user_id}" in output
     assert_retired(db, user_id, access_token)
+
+
+def test_unknown_offline_client_stops_the_revoker(admin, revoker_env, tmp_path):
+    """A typo in REVOKER_OFFLINE_CLIENTS fails at startup, before any event."""
+    env = {
+        **revoker_env,
+        "REVOKER_CURSOR_FILE": str(tmp_path / "cursor"),
+        "REVOKER_OFFLINE_CLIENTS": "revoker-live-thunderbird,revoker-live-typo",
+    }
+    output = run_revoker(env, "--once", status=1)
+    assert "offline client revoker-live-typo not found in the realm" in output
+    assert not (tmp_path / "cursor").exists()

@@ -509,7 +509,8 @@
         "realm-management": [
           "view-events",
           "view-users",
-          "manage-users"
+          "manage-users",
+          "view-clients"
         ]
       },
       "notBefore": 0,

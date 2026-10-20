@@ -73,6 +73,10 @@ PAGE_SIZE = 100
 # Keycloak's body for a 404 on a user that doesn't exist. A 404 without it may
 # come from a proxy or a wrong URL, and doesn't show that a user is gone.
 USER_NOT_FOUND = "User not found"
+# The 404s of DELETE users/<id>/consents/<client>: the user has no consent or
+# offline session for the client (nothing to revoke), or no such client exists
+CONSENT_NOT_FOUND = "Consent nor offline token not found"
+CLIENT_NOT_FOUND = "Client not found"
 # --reconcile retires at most this share of the active users without --force
 RECONCILE_MAX_SHARE = 0.1
 
@@ -347,18 +351,48 @@ class Keycloak:
             },
         )
 
+    def client_uuid(self, client_id: str) -> str:
+        """Return the internal ID of a client, raising RevokerError if there is none."""
+        res = self.admin("GET", "/clients", params={"clientId": client_id})
+        try:
+            clients = res.json() if res.status_code == 200 else None
+        except ValueError:
+            clients = None
+        if not isinstance(clients, list):
+            raise RevokerError(f"GET /clients: HTTP {res.status_code} without clients")
+        for client in clients:
+            if isinstance(client, dict) and client.get("clientId") == client_id:
+                return str(client["id"])
+        # Without view-clients Keycloak answers with an empty list as well
+        raise RevokerError(
+            f"offline client {client_id} not found in the realm (or the revoker's "
+            "service account lacks view-clients)"
+        )
+
     def logout(self, user_id: str) -> None:
         """Sign the user out of all their (online) sessions."""
-        self.admin("POST", f"/users/{quote(user_id, safe='')}/logout")
+        res = self.admin("POST", f"/users/{quote(user_id, safe='')}/logout")
+        # A user who no longer exists has no sessions left
+        if res.status_code == 404 and keycloak_error(res) != USER_NOT_FOUND:
+            raise RevokerError("POST /users/{id}/logout: unexpected HTTP 404")
 
     def revoke_offline(self, user_id: str, client_id: str) -> None:
         """Revoke the user's offline sessions (and consent) for a client."""
-        # 404: the user has no consent or offline session for the client, or
-        # no longer exists. Either way nothing is left to revoke.
-        self.admin(
+        res = self.admin(
             "DELETE",
             f"/users/{quote(user_id, safe='')}/consents/{quote(client_id, safe='')}",
         )
+        if res.status_code != 404:
+            return
+        error = keycloak_error(res)
+        if error == CLIENT_NOT_FOUND:
+            raise RevokerError(f"offline client {client_id} not found in the realm")
+        # Nothing is left to revoke: the user has no consent or offline session
+        # for the client, or no longer exists at all
+        if error not in (CONSENT_NOT_FOUND, USER_NOT_FOUND):
+            raise RevokerError(
+                "DELETE /users/{id}/consents/{client}: unexpected HTTP 404"
+            )
 
     def user_exists(self, user_id: str) -> bool:
         """Return whether the user exists.
@@ -464,6 +498,7 @@ class Revoker:
         self._db_factory = db_factory
         self._db: Any = None
         self.clock = clock
+        self._checked = False
 
     @property
     def db(self) -> Any:
@@ -487,12 +522,24 @@ class Revoker:
             self.retire(action.user_id)
         logger.info("%s: keycloak user %s", action.kind, action.user_id)
 
+    def check(self) -> None:
+        """Check, before the first poll, that the revoker can do its work.
+
+        Every offline client must exist: DELETE users/<id>/consents/<client> of
+        a missing one revokes nothing.
+        """
+        for client_id in self.config.offline_clients:
+            self.keycloak.client_uuid(client_id)
+        self._checked = True
+
     def poll_once(self) -> int:
         """Handle the events stored since the cursor; return how many acted on.
 
         The cursor is saved only when every event got handled, so after a
         failure the next poll starts from the same place.
         """
+        if not self._checked:
+            self.check()
         cursor = Cursor.load(self.config.cursor_file, int(self.clock() * 1000))
         overlap_ms = self.config.overlap * 1000
         since = max(cursor.time - overlap_ms, cursor.floor)
@@ -624,6 +671,11 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     if args.reconcile:
         return 0 if run(reconcile) else 1
+    try:
+        revoker.check()
+    except RevokerError as e:
+        logger.error("%s", e)
+        return 1
     if args.once:
         return 0 if run(revoker.poll_once) else 1
     while True:

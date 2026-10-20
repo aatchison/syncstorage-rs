@@ -46,6 +46,7 @@ class FakeKeycloak(BaseAdapter):
     def __init__(self):
         super().__init__()
         self.users = {"alice", "bob", "carol"}
+        self.clients = set(THUNDERBIRD_CLIENTS)
         # (user, client): offline sessions / consent
         self.consents = {(u, c) for u in self.users for c in THUNDERBIRD_CLIENTS}
         self.user_events = []
@@ -110,6 +111,15 @@ class FakeKeycloak(BaseAdapter):
             )
             first, size = int(query["first"][0]), int(query["max"][0])
             return self._response(request, 200, matching[first : first + size])
+        if request.method == "GET" and route == "/clients":
+            (client_id,) = query["clientId"]
+            # Like Keycloak, the search may also match other clients
+            found = [
+                {"id": f"uuid-{c}", "clientId": c}
+                for c in sorted(self.clients)
+                if c.startswith(client_id)
+            ]
+            return self._response(request, 200, found)
         if request.method == "GET" and route == "/users/count":
             return self._response(request, 200, len(self.users))
         match = re.fullmatch(r"/users/([^/]+)(/.*)?", route)
@@ -122,6 +132,8 @@ class FakeKeycloak(BaseAdapter):
             return self._response(request, 204)
         consent = re.fullmatch(r"/consents/([^/]+)", rest or "")
         if request.method == "DELETE" and consent:
+            if consent.group(1) not in self.clients:
+                return self._response(request, 404, {"error": "Client not found"})
             if (user, consent.group(1)) not in self.consents:
                 return self._response(
                     request, 404, {"error": "Consent nor offline token not found"}
@@ -626,6 +638,83 @@ def test_bad_client_secret(tmp_path):
     h.revoker.keycloak.config.client_secret = "wrong"
     with pytest.raises(RevokerError, match="can't get a token"):
         h.revoker.poll_once()
+
+
+# ── offline clients ──────────────────────────────────────────────────────────
+
+
+def test_offline_clients_are_resolved_before_the_first_poll(tmp_path):
+    h = Harness(tmp_path)
+    # The fake's search for "thunderbird" also returns "thunderbird-beta"
+    h.revoker.poll_once()
+    lookups = [q for m, p, q in h.keycloak.requests if p == f"{ADMIN}/clients"]
+    assert lookups == [{"clientId": [c]} for c in THUNDERBIRD_CLIENTS]
+    # Only once
+    h.keycloak.requests.clear()
+    h.revoker.poll_once()
+    assert not [p for m, p, q in h.keycloak.requests if p == f"{ADMIN}/clients"]
+
+
+@pytest.mark.parametrize("missing", ["thunderbird", "thunderbird-beta"])
+def test_unknown_offline_client_fails_before_any_event(tmp_path, missing):
+    h = Harness(tmp_path)
+    h.keycloak.clients.discard(missing)
+    h.user_event("UPDATE_PASSWORD", "alice", offset_ms=-1)
+    with pytest.raises(RevokerError, match=f"offline client {missing} not found"):
+        h.revoker.poll_once()
+    assert h.keycloak.calls() == []
+    assert not (tmp_path / "cursor.json").exists()
+
+
+def test_client_lookup_needs_a_list(tmp_path):
+    h = Harness(tmp_path)
+    h.keycloak.fail("GET", r"/clients$", 404, times=99, body=None)
+    with pytest.raises(RevokerError, match="without clients"):
+        h.revoker.poll_once()
+
+
+def test_consent_delete_of_a_missing_client_fails(tmp_path):
+    h = Harness(tmp_path)
+    h.start()
+    before = h.cursor()
+    # The client was deleted or renamed after the revoker started
+    h.keycloak.clients.discard("thunderbird-beta")
+    h.user_event("UPDATE_PASSWORD", "alice")
+    with pytest.raises(RevokerError, match="offline client thunderbird-beta not found"):
+        h.revoker.poll_once()
+    assert h.cursor() == before
+
+
+@pytest.mark.parametrize(
+    "method,pattern",
+    [("DELETE", r"/consents/thunderbird$"), ("POST", r"/logout$")],
+    ids=["consent", "logout"],
+)
+@pytest.mark.parametrize(
+    "body",
+    [None, {"error": "HTTP 404 Not Found"}, "<html>Not Found</html>"],
+    ids=["empty", "other-error", "html"],
+)
+def test_other_404s_of_a_revocation_fail(tmp_path, method, pattern, body):
+    h = Harness(tmp_path)
+    h.start()
+    before = h.cursor()
+    h.user_event("UPDATE_PASSWORD", "alice")
+    h.keycloak.fail(method, pattern, 404, times=99, body=body)
+    with pytest.raises(RevokerError, match="unexpected HTTP 404"):
+        h.revoker.poll_once()
+    assert h.cursor() == before
+
+
+def test_main_exits_when_an_offline_client_is_missing(tmp_path, monkeypatch):
+    h = Harness(tmp_path)
+    h.keycloak.clients.discard("thunderbird")
+    monkeypatch.setattr(revoker, "Revoker", lambda config: h.revoker)
+    for name, value in make_env(tmp_path).items():
+        monkeypatch.setenv(name, value)
+    # The forever loop too fails at startup
+    assert revoker.main([]) == 1
+    assert revoker.main(["--once"]) == 1
 
 
 # ── reconcile ────────────────────────────────────────────────────────────────

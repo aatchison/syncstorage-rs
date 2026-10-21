@@ -1108,16 +1108,35 @@ def test_main_needs_init_cursor_without_a_cursor_file(tmp_path, monkeypatch, cap
     assert exc.value.code == 2
 
 
+class LoopSleptTooOften(Exception):
+    """The forever loop didn't exit when it should have."""
+
+
 class LoopHarness:
-    """Runs main()'s forever loop against a Harness, counting polls."""
+    """Runs main()'s forever loop against a Harness, counting polls.
+
+    The faked time.sleep calls `on_sleep` (if set) after recording each
+    sleep, and raises LoopSleptTooOften after MAX_SLEEPS, so that a loop that
+    no longer exits fails the test at once instead of hanging it.
+    """
+
+    MAX_SLEEPS = 50
 
     def __init__(self, tmp_path, monkeypatch, **env):
         self.h = Harness(tmp_path)
         self.sleeps = []
+        self.on_sleep = None
         monkeypatch.setattr(revoker, "Revoker", lambda config: self.h.revoker)
-        monkeypatch.setattr(revoker.time, "sleep", self.sleeps.append)
+        monkeypatch.setattr(revoker.time, "sleep", self.sleep)
         for name, value in make_env(tmp_path, **env).items():
             monkeypatch.setenv(name, value)
+
+    def sleep(self, seconds):
+        self.sleeps.append(seconds)
+        if len(self.sleeps) > self.MAX_SLEEPS:
+            raise LoopSleptTooOften(f"{len(self.sleeps)} sleeps")
+        if self.on_sleep:
+            self.on_sleep(seconds)
 
     def polls(self):
         return len([p for m, p, q in self.h.keycloak.requests if p.endswith("/events")])
@@ -1137,13 +1156,12 @@ def test_loop_failure_count_resets_after_a_good_poll(tmp_path, monkeypatch):
     loop.h.config.attempts = 1
     keycloak = loop.h.keycloak
 
-    def sleep(seconds):
-        loop.sleeps.append(seconds)
+    def on_sleep(seconds):
         # After the third poll, Keycloak goes away for good
         if len(loop.sleeps) == 3:
             keycloak.fail("GET", r"/events$", 503, times=999)
 
-    monkeypatch.setattr(revoker.time, "sleep", sleep)
+    loop.on_sleep = on_sleep
     # Polls 1 and 2 fail, 3 succeeds, 4, 5 and 6 fail
     keycloak.fail("GET", r"/events$", 503, times=2)
     assert revoker.main([]) == 1
@@ -1236,13 +1254,12 @@ def test_unreadable_events_config_at_recheck_fails_the_poll(tmp_path):
 def test_loop_exits_when_events_are_turned_off(tmp_path, monkeypatch, caplog):
     loop = LoopHarness(tmp_path, monkeypatch, REVOKER_RECHECK_INTERVAL="60")
 
-    def sleep(seconds):
-        loop.sleeps.append(seconds)
+    def on_sleep(seconds):
         loop.h.clock.now_ms += seconds * 1000
         if len(loop.sleeps) == 2:
             loop.h.keycloak.events_config["eventsEnabled"] = False
 
-    monkeypatch.setattr(revoker.time, "sleep", sleep)
+    loop.on_sleep = on_sleep
     loop.h.config.recheck_interval = 60
     assert revoker.main([]) == 1
     assert "doesn't store user events" in caplog.text

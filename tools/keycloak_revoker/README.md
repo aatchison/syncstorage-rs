@@ -334,6 +334,39 @@ in the environment of other processes or in logs, and rotate it like other
 admin credentials: regenerate it in Keycloak (the client's "Credentials" tab),
 replace the file and restart the revoker.
 
+## Known limitations / deployment notes
+
+- **Alerting through `OnFailure=` depends on start limits.** With
+  `Restart=on-failure`, the example unit only reaches *failed*, and so only
+  runs `OnFailure=`, when `StartLimitBurst` starts fall within
+  `StartLimitIntervalSec`. A failure that takes longer per cycle (for example
+  every poll timing out, `REVOKER_ATTEMPTS` × `REVOKER_TIMEOUT` each, before the
+  `REVOKER_MAX_FAILURES` exit) may never trip the limit: the unit then restarts
+  for ever without an alert. Alert on every non-zero exit instead, for example
+  with `ExecStopPost=/usr/local/bin/alert-unless-success %n` (a placeholder for a hook of your own that alerts
+  when `$SERVICE_RESULT` isn't `success`), or at least widen
+  `StartLimitIntervalSec` (for example to 3600).
+- **The database grants can be tighter.** `UPDATE` on the whole `users` table
+  lets a leaked revoker credential rewrite any user's `nodeid`, `client_state`,
+  `keys_changed_at` or `generation`. MySQL column privileges can narrow it to
+  what `retire_user` and `--reconcile` touch, for example
+  `GRANT SELECT (email, replaced_at), UPDATE (replaced_at, generation) ON tokenserver_rs.users`
+  (not tested against `retire_user`'s statement; check it before relying on
+  it). Restrict the account's host instead of `'%'`, and add `REQUIRE SSL`.
+  The database password stays in the process environment, because
+  `tools/tokenserver/database.py` reads only `SYNC_TOKENSERVER__DATABASE_URL`;
+  unlike the client secret it can't come from a credential file.
+- **The `--reconcile` cap is per run, not cumulative.** A Keycloak that is real
+  but stale, for example restored from an old backup, lets each nightly run
+  retire up to the cap, night after night. Alert on any
+  `reconcile: retired keycloak user` line; each run that retires anyone also
+  logs `reconcile: retired N users in total` at WARNING.
+- **Offset paging, unverified.** Keycloak sorts events by time only, and the
+  revoker pages with `first`/`max`. Over a backlog longer than
+  `REVOKER_OVERLAP`, several events with the same millisecond at a page
+  boundary might lose one, which the overlap would then no longer repair. This
+  is reasoning only and has not been reproduced.
+
 ## Tests
 
 - `tests/`: unit tests, against a fake Keycloak and a fake Tokenserver database:

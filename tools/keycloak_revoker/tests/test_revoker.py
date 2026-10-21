@@ -1432,6 +1432,14 @@ def test_reconcile_logs_how_many_users_match_the_domain(tmp_path, caplog):
     assert "WARNING" not in caplog.text
 
 
+def test_reconcile_logs_the_total_retired_at_warning(tmp_path, caplog):
+    db = FakeDb([f"alice@{EMAIL_DOMAIN}", f"dave@{EMAIL_DOMAIN}"])
+    h = Harness(tmp_path, db=db)
+    assert h.revoker.reconcile() == 1
+    warnings = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+    assert warnings == ["reconcile: retired 1 users in total"]
+
+
 def test_reconcile_warns_when_no_user_matches_the_domain(tmp_path, caplog):
     # SYNC_TOKENSERVER__FXA_EMAIL_DOMAIN differs from Tokenserver's
     caplog.set_level(logging.INFO)

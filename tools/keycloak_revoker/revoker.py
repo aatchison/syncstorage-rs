@@ -888,6 +888,9 @@ class Revoker:
         for user_id in gone:
             self.retire(user_id)
             logger.info("reconcile: retired keycloak user %s", user_id)
+        if gone:
+            # The cap is per run: a stale Keycloak retires users run after run
+            logger.warning("reconcile: retired %d users in total", len(gone))
         return len(gone)
 
 

@@ -1080,6 +1080,8 @@ def test_init_cursor_setting(tmp_path, value, expected):
 def test_main_needs_init_cursor_without_a_cursor_file(tmp_path, monkeypatch, caplog):
     for name, value in make_env(tmp_path).items():
         monkeypatch.setenv(name, value)
+    # It would take precedence over make_env's secret (run-suite.sh sets it)
+    monkeypatch.delenv("REVOKER_CLIENT_SECRET_FILE", raising=False)
     keycloak = FakeKeycloak()
 
     def make_revoker(config):

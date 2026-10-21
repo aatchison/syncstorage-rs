@@ -17,6 +17,7 @@ import revoker
 from revoker import (
     RETIRE,
     REVOKE_ALL,
+    REVOKE_ALL_IF_NEW_PASSWORD,
     REVOKE_OFFLINE,
     Action,
     Config,
@@ -47,6 +48,8 @@ class FakeKeycloak(BaseAdapter):
     def __init__(self):
         super().__init__()
         self.users = {"alice", "bob", "carol"}
+        # The createdDate of each user's password credential: set long ago
+        self.passwords = {u: NOW_MS - 30 * 86_400_000 for u in self.users}
         self.clients = set(THUNDERBIRD_CLIENTS)
         # As in keycloak/realm-export.json
         self.events_config = {
@@ -136,6 +139,17 @@ class FakeKeycloak(BaseAdapter):
         user, rest = match.group(1), match.group(2)
         if request.method == "GET" and rest is None:
             return self._response(request, 200, {"id": user})
+        if request.method == "GET" and rest == "/credentials":
+            credentials = [{"id": "otp-1", "type": "otp", "createdDate": NOW_MS * 2}]
+            if user in self.passwords:
+                credentials.append(
+                    {
+                        "id": "pw-1",
+                        "type": "password",
+                        "createdDate": self.passwords[user],
+                    }
+                )
+            return self._response(request, 200, credentials)
         if request.method == "POST" and rest == "/logout":
             return self._response(request, 204)
         consent = re.fullmatch(r"/consents/([^/]+)", rest or "")
@@ -338,8 +352,8 @@ def test_user_event_action(event, expected):
         ("ACTION", "users/u1/reset-password", "USER", Action(REVOKE_ALL, "u1")),
         ("ACTION", "users/u1/logout", "USER", Action(REVOKE_OFFLINE, "u1")),
         ("DELETE", "users/u1", "USER", Action(RETIRE, "u1")),
-        # PUT users/<id> may have set a password; disabling is an UPDATE too
-        ("UPDATE", "users/u1", "USER", Action(REVOKE_ALL, "u1")),
+        # PUT users/<id> may have set a password: decided from the credential
+        ("UPDATE", "users/u1", "USER", Action(REVOKE_ALL_IF_NEW_PASSWORD, "u1", 5)),
         ("UPDATE", "users/u1/groups/g1", "USER", None),
         ("CREATE", "users/u1", "USER", None),
         ("ACTION", "users/u1/reset-password-email", "USER", None),
@@ -358,6 +372,7 @@ def test_admin_event_action(operation, path, resource_type, expected):
         "operationType": operation,
         "resourcePath": path,
         "resourceType": resource_type,
+        "time": 5,
     }
     assert admin_event_action(event) == expected
 
@@ -421,15 +436,97 @@ def test_admin_sign_out_revokes_offline_sessions(tmp_path):
     assert ("bob", "thunderbird") not in h.keycloak.consents
 
 
-def test_admin_update_revokes_all_sessions(tmp_path):
-    # A password set through PUT users/<id>, a disable or a profile edit: the
-    # event looks the same
+def test_admin_update_setting_a_password_revokes_all_sessions(tmp_path):
+    # PUT users/<id> with a credentials array: Keycloak stamps the new
+    # password with the time of the request, just before the event's
     h = Harness(tmp_path)
     h.start()
-    h.admin_event("UPDATE", "users/carol")
+    event = h.admin_event("UPDATE", "users/carol")
+    h.keycloak.passwords["carol"] = event["time"] - 5
     assert h.revoker.poll_once() == 1
     assert h.keycloak.calls() == revoke_all("carol")
     assert h.db.retired == []
+
+
+def test_admin_update_without_a_new_password_leaves_sessions_alone(tmp_path, caplog):
+    # A profile edit, attributes, required actions, a disable: the password's
+    # createdDate stays as it was
+    caplog.set_level(logging.DEBUG)
+    h = Harness(tmp_path)
+    h.start()
+    h.admin_event("UPDATE", "users/carol")
+    assert h.revoker.poll_once() == 0
+    assert h.keycloak.calls() == []
+    assert len([c for c in h.keycloak.consents if c[0] == "carol"]) == 2
+    assert "no new password: keycloak user carol" in caplog.text
+    # ...and the cursor moves past it
+    assert h.cursor()["time"] == NOW_MS + 1000
+
+
+@pytest.mark.parametrize(
+    "created_offset_ms,revoked",
+    [
+        (-60_000, True),  # REVOKER_OVERLAP before the event: Keycloak nodes' skew
+        (-60_001, False),
+        (3_000_000, True),  # set again later: still revoked, which errs safe
+    ],
+)
+def test_admin_update_password_age_against_the_overlap(
+    tmp_path, created_offset_ms, revoked
+):
+    h = Harness(tmp_path)
+    h.start()
+    event = h.admin_event("UPDATE", "users/carol")
+    h.keycloak.passwords["carol"] = event["time"] + created_offset_ms
+    assert h.revoker.poll_once() == (1 if revoked else 0)
+    assert h.keycloak.calls() == (revoke_all("carol") if revoked else [])
+
+
+def test_admin_update_of_a_user_without_a_password(tmp_path):
+    # An identity-provider user, say: no password to have been set
+    h = Harness(tmp_path)
+    h.start()
+    del h.keycloak.passwords["carol"]
+    h.admin_event("UPDATE", "users/carol")
+    assert h.revoker.poll_once() == 0
+    assert h.keycloak.calls() == []
+
+
+def test_admin_update_of_a_deleted_user_is_left_to_the_delete(tmp_path):
+    h = Harness(tmp_path)
+    h.start()
+    h.keycloak.users.discard("carol")
+    h.admin_event("UPDATE", "users/carol", offset_ms=1000)
+    h.admin_event("DELETE", "users/carol", offset_ms=2000)
+    assert h.revoker.poll_once() == 1
+    assert h.keycloak.calls() == []
+    assert h.db.retired == [f"carol@{EMAIL_DOMAIN}"]
+
+
+@pytest.mark.parametrize(
+    "status,body,message",
+    [
+        (404, {"error": "HTTP 404 Not Found"}, "unexpected HTTP 404"),
+        (404, None, "unexpected HTTP 404"),
+        (200, {"type": "password"}, "without a list"),
+        (200, [{"type": "password"}], "without a createdDate"),
+        (200, [{"type": "password", "createdDate": "1"}], "without a createdDate"),
+        (403, {"error": "forbidden"}, "HTTP 403"),
+    ],
+    ids=["other-404", "empty-404", "dict", "no-date", "string-date", "403"],
+)
+def test_admin_update_with_unexpected_credentials_fails_the_poll(
+    tmp_path, status, body, message
+):
+    h = Harness(tmp_path)
+    h.start()
+    before = h.cursor()
+    h.admin_event("UPDATE", "users/carol")
+    h.keycloak.fail("GET", r"/users/carol/credentials$", status, times=99, body=body)
+    with pytest.raises(RevokerError, match=message):
+        h.revoker.poll_once()
+    assert h.cursor() == before
+    assert h.keycloak.calls() == []
 
 
 def test_admin_delete_retires_tokenserver_user(tmp_path):

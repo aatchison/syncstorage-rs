@@ -8,8 +8,9 @@ events and acts on them through the Keycloak admin API and the Tokenserver
 database:
 
   password change (user events UPDATE_PASSWORD, UPDATE_CREDENTIAL of a password,
-  admin ACTION users/<id>/reset-password), and any admin UPDATE users/<id>,
-  which may have set a password
+  admin ACTION users/<id>/reset-password), and an admin UPDATE users/<id> after
+  which the user's password credential is newer than the event (less
+  REVOKER_OVERLAP)
       sign the user out of every session (POST users/<id>/logout), then revoke
       their offline sessions of each configured client
       (DELETE users/<id>/consents/<client>)
@@ -62,6 +63,8 @@ logger = logging.getLogger("keycloak_revoker")
 
 # What to do for an event
 REVOKE_ALL = "revoke-all-sessions"
+# REVOKE_ALL, but only if the user's password was set at or after the event
+REVOKE_ALL_IF_NEW_PASSWORD = "revoke-all-sessions-if-new-password"
 REVOKE_OFFLINE = "revoke-offline-sessions"
 RETIRE = "retire-tokenserver-user"
 
@@ -114,6 +117,8 @@ class Action:
 
     kind: str
     user_id: str
+    # The event's time, for REVOKE_ALL_IF_NEW_PASSWORD
+    event_time: int = 0
 
 
 def user_event_action(event: Mapping[str, Any]) -> Optional[Action]:
@@ -145,10 +150,10 @@ def admin_event_action(event: Mapping[str, Any]) -> Optional[Action]:
     if operation == "ACTION" and sub_resource == "reset-password":
         return Action(REVOKE_ALL, user_id)
     if operation == "UPDATE" and sub_resource is None:
-        # PUT users/<id> can set a password through its credentials array, and
-        # the event doesn't say whether it did: every update counts as one, so
-        # profile edits and disabling sign the user out too
-        return Action(REVOKE_ALL, user_id)
+        # PUT users/<id> can set a password through its credentials array, but
+        # the event doesn't say whether it did (its representation never holds
+        # credentials): the password's createdDate does
+        return Action(REVOKE_ALL_IF_NEW_PASSWORD, user_id, int(event.get("time", 0)))
     if operation == "ACTION" and sub_resource == "logout":
         return Action(REVOKE_OFFLINE, user_id)
     if operation == "DELETE" and sub_resource is None:
@@ -464,6 +469,36 @@ class Keycloak:
                 "DELETE /users/{id}/consents/{client}: unexpected HTTP 404"
             )
 
+    def password_created(self, user_id: str) -> Optional[list[int]]:
+        """Return the createdDate of each of the user's password credentials.
+
+        None if the user no longer exists (Keycloak's "User not found").
+        """
+        res = self.admin("GET", f"/users/{quote(user_id, safe='')}/credentials")
+        if res.status_code == 404:
+            if keycloak_error(res) == USER_NOT_FOUND:
+                return None
+            raise RevokerError("GET /users/{id}/credentials: unexpected HTTP 404")
+        try:
+            credentials = res.json()
+        except ValueError:
+            credentials = None
+        if not isinstance(credentials, list):
+            raise RevokerError(
+                f"GET /users/{{id}}/credentials: HTTP {res.status_code} without a list"
+            )
+        created = []
+        for c in credentials:
+            if not isinstance(c, dict) or c.get("type") != "password":
+                continue
+            date = c.get("createdDate")
+            if not isinstance(date, int) or isinstance(date, bool):
+                raise RevokerError(
+                    "GET /users/{id}/credentials: a password without a createdDate"
+                )
+            created.append(date)
+        return created
+
     def user_exists(self, user_id: str) -> bool:
         """Return whether the user exists.
 
@@ -620,8 +655,18 @@ class Revoker:
         """Retire the Tokenserver user of a Keycloak user."""
         self.db.retire_user(f"{user_id}@{self.config.email_domain}")
 
-    def apply(self, action: Action) -> None:
-        """Take an action."""
+    def apply(self, action: Action) -> bool:
+        """Take an action; return False if it turned out to need nothing."""
+        if action.kind == REVOKE_ALL_IF_NEW_PASSWORD:
+            created = self.keycloak.password_created(action.user_id)
+            # A deleted user's DELETE event retires them; a user whose password
+            # is older than the update (less the overlap, for skew between
+            # Keycloak's nodes) had their profile, attributes, required
+            # actions or enabled flag changed, which needs no sign-out
+            since = action.event_time - self.config.overlap * 1000
+            if not created or max(created) < since:
+                return False
+            action = Action(REVOKE_ALL, action.user_id)
         if action.kind == REVOKE_ALL:
             self.keycloak.logout(action.user_id)
         if action.kind in (REVOKE_ALL, REVOKE_OFFLINE):
@@ -629,6 +674,7 @@ class Revoker:
                 self.keycloak.revoke_offline(action.user_id, client_id)
         if action.kind == RETIRE:
             self.retire(action.user_id)
+        return True
 
     def check_events_config(self) -> None:
         """Check that the realm stores the events the revoker acts on.
@@ -748,16 +794,27 @@ class Revoker:
                 action = admin_event_action(event)
                 # The resource path names the user ID only
                 what = f"{event.get('operationType')} {event.get('resourcePath')}"
-            if action:
-                self.apply(action)
+            if action and self.apply(action):
+                kind_done = (
+                    REVOKE_ALL
+                    if action.kind == REVOKE_ALL_IF_NEW_PASSWORD
+                    else action.kind
+                )
                 logger.info(
                     "%s: keycloak user %s, for %s event %s",
-                    action.kind,
+                    kind_done,
                     action.user_id,
                     kind,
                     what,
                 )
                 acted += 1
+            elif action:
+                logger.debug(
+                    "no new password: keycloak user %s, for %s event %s",
+                    action.user_id,
+                    kind,
+                    what,
+                )
             seen[key] = event_time
             newest = max(newest, event_time)
 

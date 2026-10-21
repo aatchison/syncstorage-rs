@@ -208,6 +208,68 @@ def test_reconcile_retires_user_deleted_while_revoker_was_down(
     assert_retired(db, user_id, access_token)
 
 
+@pytest.mark.parametrize("offline", [False, True], ids=["online", "offline"])
+def test_admin_profile_edit_leaves_sessions_alone(
+    admin, revoker_env, live_client, tmp_path, offline
+):
+    """An admin PUT users/<id> that sets no password signs nobody out.
+
+    The revoker looks at the password credential's createdDate, which only a
+    PUT with a credentials array changes. With REVOKER_OVERLAP 1 s (its own
+    cursor), a password set 2 s before the edit counts as old.
+    """
+    env = revoker_env.but(
+        REVOKER_CURSOR_FILE=str(tmp_path / "cursor"), REVOKER_OVERLAP="1"
+    )
+    run_revoker(env, "--once", "--init-cursor")
+    name, password, user_id = new_user(admin, "profile-edit")
+    tokens = login(admin, name, password, offline)
+    res = admin("GET", f"/users/{user_id}/credentials")
+    assert res.status_code == 200, why(res)
+    (created,) = [c["createdDate"] for c in res.json() if c["type"] == "password"]
+    time.sleep(2)
+
+    rep = admin("GET", f"/users/{user_id}").json()
+    rep["firstName"] = "Edited"
+    rep["attributes"] = {"department": ["sync"]}
+    res = admin("PUT", f"/users/{user_id}", json=rep)
+    assert res.status_code == 204, why(res)
+    assert admin_events_on(admin, user_id)[0] == "UPDATE"
+    res = admin("GET", f"/users/{user_id}/credentials")
+    assert [c["createdDate"] for c in res.json() if c["type"] == "password"] == [
+        created
+    ]
+
+    output = run_revoker(env, "--once")
+    assert f"no new password: keycloak user {user_id}" in output
+    assert f"revoke-all-sessions: keycloak user {user_id}" not in output
+    res = refresh(admin, tokens["refresh_token"])
+    assert res.status_code == 200, why(res)
+    assert introspect(admin, tokens["access_token"])
+    if offline:
+        assert len(offline_sessions(admin, user_id, live_client)) == 1
+
+
+def test_admin_disable_is_left_to_keycloak(admin, revoker_env, live_client, tmp_path):
+    """Disabling sets no password: Keycloak alone refuses the refresh."""
+    env = revoker_env.but(
+        REVOKER_CURSOR_FILE=str(tmp_path / "cursor"), REVOKER_OVERLAP="1"
+    )
+    run_revoker(env, "--once", "--init-cursor")
+    name, password, user_id = new_user(admin, "disable-old-pw")
+    tokens = login(admin, name, password, offline=True)
+    time.sleep(2)
+    assert disable(admin, user_id).status_code == 204
+
+    output = run_revoker(env, "--once")
+    assert f"no new password: keycloak user {user_id}" in output
+    res = refresh(admin, tokens["refresh_token"])
+    assert res.status_code == 400, why(res)
+    assert res.json()["error"] == "invalid_grant", why(res)
+    # The revoker removed nothing
+    assert len(offline_sessions(admin, user_id, live_client)) == 1
+
+
 def test_missing_cursor_file_stops_the_revoker(revoker_env, tmp_path):
     """Without a cursor file the revoker refuses to start, unless asked to."""
     env = revoker_env.but(REVOKER_CURSOR_FILE=str(tmp_path / "cursor"))

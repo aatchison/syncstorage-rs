@@ -73,8 +73,10 @@ DELETE_USER_EVENTS = ("DELETE_ACCOUNT",)
 ADMIN_USER_PATH = re.compile(r"^users/([^/]+)(?:/(reset-password|logout))?$")
 
 PAGE_SIZE = 100
-# The user events the realm must store
-REQUIRED_EVENT_TYPES = (*PASSWORD_USER_EVENTS, *DELETE_USER_EVENTS)
+# The user events the realm must store. Not UPDATE_PASSWORD, deprecated in
+# Keycloak 26 (EventType): every password change also emits UPDATE_CREDENTIAL
+# with credential_type password. It is still acted on when stored.
+REQUIRED_EVENT_TYPES = ("UPDATE_CREDENTIAL", *DELETE_USER_EVENTS)
 # Keycloak's body for a 404 on a user that doesn't exist. A 404 without it may
 # come from a proxy or a wrong URL, and doesn't show that a user is gone.
 USER_NOT_FOUND = "User not found"
@@ -207,6 +209,7 @@ class Config:
     reconcile_max: int = 10
     max_failures: int = 5
     init_cursor: bool = False
+    recheck_interval: int = 3600
     # The realm's adminEventsExpiration in seconds, which the revoker can't
     # read; None: admin events are kept at least as long as user events
     admin_events_expiration: Optional[int] = None
@@ -262,11 +265,14 @@ class Config:
             reconcile_max=_env_int(env, "REVOKER_RECONCILE_MAX", 10),
             max_failures=_env_int(env, "REVOKER_MAX_FAILURES", 5),
             init_cursor=_env_flag(env, "REVOKER_INIT_CURSOR"),
+            recheck_interval=_env_int(env, "REVOKER_RECHECK_INTERVAL", 3600),
             admin_events_expiration=_env_int(env, "REVOKER_ADMIN_EVENTS_EXPIRATION", 0)
             or None,
         )
         if config.max_failures < 1:
             raise RevokerError("REVOKER_MAX_FAILURES must be at least 1")
+        if config.recheck_interval < 1:
+            raise RevokerError("REVOKER_RECHECK_INTERVAL must be at least 1")
         if (
             config.admin_events_expiration is not None
             and config.admin_events_expiration < 0
@@ -596,6 +602,8 @@ class Revoker:
         self._db: Any = None
         self.clock = clock
         self._checked = False
+        # The revoker's clock at the last successful events-config check
+        self._checked_at = 0.0
         # Create the cursor at the first poll, rather than load it
         self._init_cursor = config.init_cursor
         # How long the realm keeps both kinds of events, in ms; None: for ever
@@ -622,20 +630,21 @@ class Revoker:
         if action.kind == RETIRE:
             self.retire(action.user_id)
 
-    def check(self) -> None:
-        """Check, before the first poll, that the revoker can do its work.
+    def check_events_config(self) -> None:
+        """Check that the realm stores the events the revoker acts on.
 
-        The realm must store user events of the types the revoker acts on, and
-        admin events: otherwise every poll finds nothing, for ever. Every
-        offline client must exist: DELETE users/<id>/consents/<client> of a
-        missing one revokes nothing. Each is checked with that same DELETE for
-        the revoker's own service-account user, which has nothing to revoke.
+        Otherwise every poll finds nothing, for ever. Also reads how long the
+        realm keeps them, for the gap check. A configuration that fails the
+        check raises FatalRevokerError: retrying doesn't fix it. Not being able
+        to read it raises RevokerError, as any Keycloak error.
         """
         events = self.keycloak.events_config()
         if events.get("eventsEnabled") is not True:
-            raise RevokerError("the realm doesn't store user events (eventsEnabled)")
+            raise FatalRevokerError(
+                "the realm doesn't store user events (eventsEnabled)"
+            )
         if events.get("adminEventsEnabled") is not True:
-            raise RevokerError(
+            raise FatalRevokerError(
                 "the realm doesn't store admin events (adminEventsEnabled)"
             )
         # An empty list would store Keycloak's default types; the revoker
@@ -643,7 +652,7 @@ class Revoker:
         enabled = events.get("enabledEventTypes") or []
         missing = [t for t in REQUIRED_EVENT_TYPES if t not in enabled]
         if missing:
-            raise RevokerError(
+            raise FatalRevokerError(
                 "the realm doesn't store these user events (enabledEventTypes): "
                 + ", ".join(missing)
             )
@@ -659,9 +668,30 @@ class Revoker:
             if isinstance(e, int) and not isinstance(e, bool) and e > 0
         ]
         self._events_expiration_ms = min(expirations) * 1000 if expirations else None
+        self._checked_at = self.clock()
+
+    def check(self) -> None:
+        """Check, before the first poll, that the revoker can do its work.
+
+        The realm must store the events (check_events_config). Every offline
+        client must exist: DELETE users/<id>/consents/<client> of a missing one
+        revokes nothing. Each is checked with that same DELETE for the
+        revoker's own service-account user, which has nothing to revoke.
+        """
+        self.check_events_config()
         for client_id in self.config.offline_clients:
             self.keycloak.check_offline_client(client_id)
         self._checked = True
+
+    def recheck_events_config(self) -> None:
+        """Check the events configuration again, if REVOKER_RECHECK_INTERVAL passed.
+
+        An admin may turn events off or shorten their retention at any time,
+        and the poller rarely restarts. A failed read is retried at the next
+        poll, as the time of the last check moves only when one succeeds.
+        """
+        if self.clock() - self._checked_at >= self.config.recheck_interval:
+            self.check_events_config()
 
     def poll_once(self) -> int:
         """Handle the events stored since the cursor; return how many acted on.
@@ -671,6 +701,8 @@ class Revoker:
         """
         if not self._checked:
             self.check()
+        else:
+            self.recheck_events_config()
         now_ms = int(self.clock() * 1000)
         overlap_ms = self.config.overlap * 1000
         # A first start looks back by the overlap too, in case the revoker's

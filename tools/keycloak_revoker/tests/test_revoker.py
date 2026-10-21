@@ -750,10 +750,8 @@ DAY_MS = 86_400_000
             {"enabledEventTypes": ["UPDATE_PASSWORD", "LOGOUT"]},
             "UPDATE_CREDENTIAL, DELETE_ACCOUNT",
         ),
-        (
-            {"enabledEventTypes": []},
-            "UPDATE_CREDENTIAL, UPDATE_PASSWORD, DELETE_ACCOUNT",
-        ),
+        # UPDATE_PASSWORD, deprecated, isn't required
+        ({"enabledEventTypes": []}, "UPDATE_CREDENTIAL, DELETE_ACCOUNT$"),
     ],
     ids=["events-off", "events-unset", "admin-events-off", "types-missing", "no-types"],
 )
@@ -765,6 +763,21 @@ def test_realm_must_store_the_events(tmp_path, change, message):
         h.revoker.poll_once()
     assert h.keycloak.calls() == []
     assert not (tmp_path / "cursor.json").exists()
+
+
+def test_update_password_events_are_not_required(tmp_path):
+    # Deprecated in Keycloak 26; UPDATE_CREDENTIAL covers every password change
+    h = Harness(tmp_path)
+    h.keycloak.events_config["enabledEventTypes"].remove("UPDATE_PASSWORD")
+    assert h.revoker.poll_once() == 0
+    h.clock.now_ms += 3_600_000
+    h.user_event(
+        "UPDATE_CREDENTIAL",
+        "alice",
+        offset_ms=1000,
+        details={"credential_type": "password"},
+    )
+    assert h.revoker.poll_once() == 1
 
 
 def test_logout_events_are_not_required(tmp_path):
@@ -1048,6 +1061,104 @@ def test_loop_exits_at_once_on_an_event_gap(tmp_path, monkeypatch, caplog):
     assert revoker.main([]) == 1
     assert loop.sleeps == []
     assert "events may have been lost" in caplog.text
+
+
+def config_reads(h):
+    return [p for m, p, q in h.keycloak.requests if p.endswith("/events/config")]
+
+
+def test_events_config_is_rechecked_hourly(tmp_path):
+    h = Harness(tmp_path)
+    assert h.revoker.poll_once() == 0
+    assert len(config_reads(h)) == 1
+    # Not before REVOKER_RECHECK_INTERVAL (3600 s) has passed
+    h.clock.now_ms += 3_599_000
+    h.revoker.poll_once()
+    assert len(config_reads(h)) == 1
+    h.clock.now_ms += 1000
+    h.keycloak.requests.clear()
+    h.revoker.poll_once()
+    assert len(config_reads(h)) == 1
+    # Without the client checks
+    assert h.keycloak.calls() == []
+    # And again an interval after that check
+    h.clock.now_ms += 1000
+    h.revoker.poll_once()
+    assert len(config_reads(h)) == 1
+
+
+@pytest.mark.parametrize(
+    "change,message",
+    [
+        ({"eventsEnabled": False}, "doesn't store user events"),
+        ({"adminEventsEnabled": False}, "doesn't store admin events"),
+        ({"enabledEventTypes": ["UPDATE_PASSWORD"]}, "UPDATE_CREDENTIAL"),
+    ],
+    ids=["events-off", "admin-events-off", "types-removed"],
+)
+def test_events_config_changed_later_is_fatal(tmp_path, change, message):
+    h = Harness(tmp_path)
+    h.start()
+    before = h.cursor()
+    # An admin turns events off after the revoker started
+    h.keycloak.events_config.update(change)
+    h.user_event("UPDATE_PASSWORD", "alice")
+    with pytest.raises(FatalRevokerError, match=message):
+        h.revoker.poll_once()
+    assert h.cursor() == before
+    assert h.keycloak.calls() == []
+
+
+def test_shortened_retention_is_picked_up_by_the_recheck(tmp_path):
+    h = Harness(tmp_path)
+    h.start()
+    h.revoker.poll_once()
+    polled = h.cursor()["polled"]
+    # Retention cut from 7 days to 1, then the revoker is down for 2
+    h.keycloak.events_config["eventsExpiration"] = 86400
+    h.clock.now_ms = polled + 2 * DAY_MS
+    with pytest.raises(FatalRevokerError, match="events may have been lost"):
+        h.revoker.poll_once()
+
+
+def test_unreadable_events_config_at_recheck_fails_the_poll(tmp_path):
+    h = Harness(tmp_path)
+    h.start()
+    before = h.cursor()
+    h.keycloak.fail("GET", r"/events/config$", 503, times=h.config.attempts)
+    with pytest.raises(RevokerError, match="Keycloak unavailable") as exc:
+        h.revoker.poll_once()
+    # Not fatal: retried at the next poll, as any Keycloak error
+    assert not isinstance(exc.value, FatalRevokerError)
+    assert h.cursor() == before
+    h.keycloak.requests.clear()
+    assert h.revoker.poll_once() == 0
+    assert len(config_reads(h)) == 1
+
+
+def test_loop_exits_when_events_are_turned_off(tmp_path, monkeypatch, caplog):
+    loop = LoopHarness(tmp_path, monkeypatch, REVOKER_RECHECK_INTERVAL="60")
+
+    def sleep(seconds):
+        loop.sleeps.append(seconds)
+        loop.h.clock.now_ms += seconds * 1000
+        if len(loop.sleeps) == 2:
+            loop.h.keycloak.events_config["eventsEnabled"] = False
+
+    monkeypatch.setattr(revoker.time, "sleep", sleep)
+    loop.h.config.recheck_interval = 60
+    assert revoker.main([]) == 1
+    assert "doesn't store user events" in caplog.text
+    # Found at the first re-check after the change: 60 s, 4 polls of 15 s
+    assert len(loop.sleeps) == 4
+
+
+def test_recheck_interval_setting(tmp_path):
+    assert Config.from_env(make_env(tmp_path)).recheck_interval == 3600
+    config = Config.from_env(make_env(tmp_path, REVOKER_RECHECK_INTERVAL="600"))
+    assert config.recheck_interval == 600
+    with pytest.raises(RevokerError, match="REVOKER_RECHECK_INTERVAL"):
+        Config.from_env(make_env(tmp_path, REVOKER_RECHECK_INTERVAL="0"))
 
 
 def test_max_failures_setting(tmp_path):

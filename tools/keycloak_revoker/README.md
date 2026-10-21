@@ -79,8 +79,11 @@ that stores no events gives the revoker nothing to do. So that this never
 happens unnoticed, the revoker exits non-zero, with an error that says why:
 
 - at startup, unless `GET /events/config` shows `eventsEnabled` and
-  `adminEventsEnabled`, with `UPDATE_PASSWORD`, `UPDATE_CREDENTIAL` and
-  `DELETE_ACCOUNT` listed in `enabledEventTypes`
+  `adminEventsEnabled`, with `UPDATE_CREDENTIAL` and `DELETE_ACCOUNT` listed
+  in `enabledEventTypes`; and again when the same check fails at its re-check,
+  every `REVOKER_RECHECK_INTERVAL` (an hour by default) while polling, which
+  also picks up a changed `eventsExpiration`. A re-check that can't read the
+  configuration fails only that poll
 - before a poll, if the last poll that handled every event started longer ago
   than the realm keeps events, less `REVOKER_OVERLAP` (the cursor file records
   when). The retention is the shorter of `eventsExpiration` and
@@ -140,6 +143,7 @@ All from environment variables.
 | `REVOKER_OFFLINE_CLIENTS` | `SYNC_TOKENSERVER__OIDC_ALLOWED_CLIENTS` | Comma-separated IDs of the clients Thunderbird signs in with, whose offline sessions are revoked |
 | `REVOKER_CURSOR_FILE` | (required) | The cursor file. Its directory must be writable |
 | `REVOKER_ADMIN_EVENTS_EXPIRATION` | | The realm's `adminEventsExpiration`, in seconds, if it is set and shorter than `eventsExpiration`. Unset or 0: admin events are kept at least as long as user events. See "Lost events" |
+| `REVOKER_RECHECK_INTERVAL` | 3600 | Seconds between re-checks of the events configuration while polling, see "Lost events" |
 | `REVOKER_INIT_CURSOR` | 0 | `1`: the same as `--init-cursor`. Remove it again once the cursor exists |
 | `REVOKER_INTERVAL` | 15 | Seconds between polls |
 | `REVOKER_OVERLAP` | 60 | Seconds each poll looks back before the cursor, and a first start before the current time. Must exceed the worst clock skew, see "Cursor" |
@@ -159,9 +163,11 @@ secret. Each action is logged with the event it was for, for example
 
 The realm must store events:
 
-- `eventsEnabled: true`, with at least `UPDATE_CREDENTIAL`, `UPDATE_PASSWORD`
-  and `DELETE_ACCOUNT` in `enabledEventTypes`. The dev realm also stores
-  `LOGOUT`, for auditing only: the revoker doesn't use it
+- `eventsEnabled: true`, with at least `UPDATE_CREDENTIAL` and
+  `DELETE_ACCOUNT` in `enabledEventTypes`. `UPDATE_PASSWORD` is deprecated in
+  Keycloak 26 and not required: a password change emits `UPDATE_CREDENTIAL`
+  too, and the revoker acts on `UPDATE_PASSWORD` when it is stored. The dev
+  realm stores both, and `LOGOUT`, for auditing only: the revoker uses neither
 - `eventsExpiration` comfortably longer than the revoker could be down (the dev
   realm keeps 604800 s, 7 days). Events hold user IDs and IP addresses; choose a
   retention that fits your privacy policy. `--reconcile` covers deletions

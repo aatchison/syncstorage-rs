@@ -54,10 +54,17 @@ The cursor file records the time of the newest event handled, but never later
 than the revoker's own clock (less a second) at that poll. Each poll asks for
 events from that time minus `REVOKER_OVERLAP` seconds, so an event Keycloak
 stored late is still seen; the IDs of the events handled in that window are kept
-in the file so that none is handled twice. When the file doesn't exist, the
-revoker starts from the current time minus `REVOKER_OVERLAP`: older events are
-never handled. The file is written only after every event of a poll has been
-handled. It holds event IDs and times, no user data.
+in the file so that none is handled twice. The file is written only after every
+event of a poll has been handled. It holds event IDs and times, no user data.
+
+The revoker refuses to start when the file doesn't exist, and exits 1 with
+`no cursor file: first deployment? Run with --init-cursor`: starting afresh
+would skip every event since its last poll, and a missing file is as likely to
+be a wiped state directory, a lost volume or a changed `REVOKER_CURSOR_FILE` as
+a first deployment. `--init-cursor` (or `REVOKER_INIT_CURSOR=1`) creates a new
+cursor at the current time minus `REVOKER_OVERLAP`; older events are never
+handled. It fails if the file already exists, so it can't restart a cursor by
+mistake when left in place.
 
 Keycloak stamps each event with the clock of the node that stored it, and sorts
 and filters events by that time only. Run NTP on every Keycloak node and on the
@@ -78,7 +85,11 @@ happens unnoticed, the revoker exits non-zero, with an error that says why:
   than `eventsExpiration` (the cursor file records when). Password changes in
   that gap may never be acted on. Sign every user out (the realm's "Sign out
   all active sessions", which sets the realm's `notBefore`), run `--reconcile`
-  for the deletions, then delete the cursor file to start again
+  for the deletions, then delete the cursor file and start the revoker once
+  with `--init-cursor`
+- at startup, if the cursor file is missing (see "Cursor"). If the revoker ran
+  before, treat it as a gap: take the same steps, then start it with
+  `--init-cursor`
 - when polling forever, after `REVOKER_MAX_FAILURES` polls in a row have failed:
   for example Keycloak is gone for good, or a role was taken away and every
   call gets 403
@@ -120,6 +131,7 @@ All from environment variables.
 | `REVOKER_CLIENT_SECRET` | | The client's secret, if there is no file |
 | `REVOKER_OFFLINE_CLIENTS` | `SYNC_TOKENSERVER__OIDC_ALLOWED_CLIENTS` | Comma-separated IDs of the clients Thunderbird signs in with, whose offline sessions are revoked |
 | `REVOKER_CURSOR_FILE` | (required) | The cursor file. Its directory must be writable |
+| `REVOKER_INIT_CURSOR` | 0 | `1`: the same as `--init-cursor`. Remove it again once the cursor exists |
 | `REVOKER_INTERVAL` | 15 | Seconds between polls |
 | `REVOKER_OVERLAP` | 60 | Seconds each poll looks back before the cursor, and a first start before the current time. Must exceed the worst clock skew, see "Cursor" |
 | `REVOKER_TIMEOUT` | 10 | HTTP timeout in seconds |
@@ -171,6 +183,7 @@ From this directory:
 
 ```shell
 poetry install --only main                 # without the test and lint tools
+poetry run python revoker.py --once --init-cursor   # first deployment only
 poetry run python revoker.py               # poll forever
 poetry run python revoker.py --once        # poll once
 poetry run python revoker.py --reconcile   # reconcile once
@@ -246,6 +259,19 @@ WantedBy=timers.target
 
 The `.venv` comes from `POETRY_VIRTUALENVS_IN_PROJECT=true poetry install --only
 main`, run as the service user.
+
+On the first deployment, create the cursor with the unit's own environment,
+through a temporary drop-in, then remove it:
+
+```shell
+systemctl edit keycloak-revoker      # add: [Service] Environment=REVOKER_INIT_CURSOR=1
+systemctl start keycloak-revoker     # creates /var/lib/keycloak-revoker/cursor, then polls
+systemctl revert keycloak-revoker    # drop the setting again
+```
+
+Then run the reconcile service once. Don't leave `REVOKER_INIT_CURSOR=1` (or
+`--init-cursor` in `ExecStart`) in place: once the cursor exists every restart
+would fail, and the setting is what keeps a lost cursor from going unnoticed.
 
 ### Alerting
 

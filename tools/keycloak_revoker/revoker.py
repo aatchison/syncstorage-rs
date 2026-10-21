@@ -182,6 +182,13 @@ def _env_int(env: Mapping[str, str], name: str, default: int) -> int:
         raise RevokerError(f"{name} must be an integer") from None
 
 
+def _env_flag(env: Mapping[str, str], name: str) -> bool:
+    value = env.get(name, "").strip()
+    if value not in ("", "0", "1"):
+        raise RevokerError(f"{name} must be 1 or 0")
+    return value == "1"
+
+
 @dataclass
 class Config:
     """Settings, from environment variables (see from_env)."""
@@ -199,6 +206,7 @@ class Config:
     attempts: int = 4
     reconcile_max: int = 10
     max_failures: int = 5
+    init_cursor: bool = False
 
     @classmethod
     def from_env(cls, env: Mapping[str, str]) -> "Config":
@@ -250,6 +258,7 @@ class Config:
             attempts=_env_int(env, "REVOKER_ATTEMPTS", 4),
             reconcile_max=_env_int(env, "REVOKER_RECONCILE_MAX", 10),
             max_failures=_env_int(env, "REVOKER_MAX_FAILURES", 5),
+            init_cursor=_env_flag(env, "REVOKER_INIT_CURSOR"),
         )
         if config.max_failures < 1:
             raise RevokerError("REVOKER_MAX_FAILURES must be at least 1")
@@ -491,7 +500,7 @@ class Cursor:
     for events from `time - overlap`, so an event that Keycloak stored late, or
     stamped with a clock that runs behind, still turns up; `seen` holds the
     keys of the events handled in that window, so none is handled twice.
-    `floor` is the revoker's first start minus the overlap: older events are
+    `floor` is the revoker's first start (with --init-cursor) minus the overlap: older events are
     never handled. `polled` is the revoker's clock at the start of the last
     poll that handled every event (or at the first start): events stored
     before it have been seen, however quiet the realm.
@@ -504,16 +513,18 @@ class Cursor:
     polled: int
 
     @classmethod
-    def load(cls, path: str, start_ms: int, now_ms: int) -> "Cursor":
-        """Load the cursor, or start one at `start_ms` if there is none."""
+    def load(cls, path: str) -> "Cursor":
+        """Load the cursor; a missing file is fatal (see `create`)."""
         try:
             with open(path) as f:
                 data = json.load(f)
         except FileNotFoundError:
-            cursor = cls(path, start_ms, start_ms, {}, now_ms)
-            cursor.save()
-            logger.info("no cursor file; starting from now minus REVOKER_OVERLAP")
-            return cursor
+            # Starting afresh would skip every event since the last poll
+            raise FatalRevokerError(
+                "no cursor file: first deployment? Run with --init-cursor (or "
+                "REVOKER_INIT_CURSOR=1). If the revoker ran before, events since "
+                "its last poll may be lost: see 'Lost events' in its README"
+            ) from None
         except (OSError, ValueError) as e:
             raise RevokerError(f"can't read the cursor file: {e}") from None
         return cls(
@@ -524,6 +535,19 @@ class Cursor:
             # Cursor files from before `polled` existed
             int(data.get("polled", data["time"])),
         )
+
+    @classmethod
+    def create(cls, path: str, start_ms: int, now_ms: int) -> "Cursor":
+        """Write a new cursor starting at `start_ms`; an existing file is fatal."""
+        if os.path.exists(path):
+            raise FatalRevokerError(
+                "--init-cursor (REVOKER_INIT_CURSOR=1) given, but the cursor file "
+                "exists; run without it"
+            )
+        cursor = cls(path, start_ms, start_ms, {}, now_ms)
+        cursor.save()
+        logger.info("new cursor file; starting from now minus REVOKER_OVERLAP")
+        return cursor
 
     def save(self) -> None:
         """Write the cursor atomically."""
@@ -562,6 +586,8 @@ class Revoker:
         self._db: Any = None
         self.clock = clock
         self._checked = False
+        # Create the cursor at the first poll, rather than load it
+        self._init_cursor = config.init_cursor
         # How long the realm keeps user events, in ms; None: for ever
         self._events_expiration_ms: Optional[int] = None
 
@@ -632,7 +658,11 @@ class Revoker:
         overlap_ms = self.config.overlap * 1000
         # A first start looks back by the overlap too, in case the revoker's
         # clock runs ahead of Keycloak's
-        cursor = Cursor.load(self.config.cursor_file, now_ms - overlap_ms, now_ms)
+        if self._init_cursor:
+            cursor = Cursor.create(self.config.cursor_file, now_ms - overlap_ms, now_ms)
+            self._init_cursor = False
+        else:
+            cursor = Cursor.load(self.config.cursor_file)
         expiration_ms = self._events_expiration_ms
         if expiration_ms is not None and now_ms - cursor.polled > expiration_ms:
             raise FatalRevokerError(
@@ -759,6 +789,12 @@ def main(argv: Optional[list[str]] = None) -> int:
         help="retire Tokenserver users whose Keycloak user is gone, then exit",
     )
     parser.add_argument(
+        "--init-cursor",
+        action="store_true",
+        help="start a new cursor at the current time: for the first deployment, "
+        "or after the steps under 'Lost events'; fails if the cursor file exists",
+    )
+    parser.add_argument(
         "--force",
         action="store_true",
         help="with --reconcile: retire however many users are gone",
@@ -766,6 +802,8 @@ def main(argv: Optional[list[str]] = None) -> int:
     args = parser.parse_args(argv)
     if args.force and not args.reconcile:
         parser.error("--force needs --reconcile")
+    if args.init_cursor and args.reconcile:
+        parser.error("--init-cursor can't be used with --reconcile")
     logging.basicConfig(
         level=os.environ.get("REVOKER_LOG_LEVEL", "INFO").upper(),
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
@@ -794,6 +832,8 @@ def main(argv: Optional[list[str]] = None) -> int:
     except RevokerError as e:
         logger.error("%s", e)
         return 2
+    if args.init_cursor:
+        config.init_cursor = True
     revoker = Revoker(config)
 
     def reconcile() -> int:

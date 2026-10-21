@@ -208,8 +208,10 @@ def make_env(tmp_path, **overrides):
 
 
 class Harness:
-    def __init__(self, tmp_path, db=None):
-        self.config = Config.from_env(make_env(tmp_path))
+    def __init__(self, tmp_path, db=None, init_cursor=True):
+        # By default a first deployment, which creates the cursor file
+        env = make_env(tmp_path, REVOKER_INIT_CURSOR="1" if init_cursor else None)
+        self.config = Config.from_env(env)
         self.keycloak = FakeKeycloak()
         self.db = db or FakeDb()
         self.clock = Clock()
@@ -571,7 +573,7 @@ def test_cursor_is_persisted_and_events_are_handled_once(tmp_path):
     assert h.keycloak.calls() == []
 
     # A new Revoker (a restart) carries on from the file
-    h2 = Harness(tmp_path)
+    h2 = Harness(tmp_path, init_cursor=False)
     h2.keycloak.user_events = list(h.keycloak.user_events)
     h2.next_id = h.next_id
     h2.admin_event("ACTION", "users/bob/logout", offset_ms=2000)
@@ -838,7 +840,7 @@ def test_no_expiration_means_no_gap(tmp_path):
 
 def test_cursor_file_without_polled(tmp_path):
     # Written before `polled` existed: `time` stands in for it
-    h = Harness(tmp_path)
+    h = Harness(tmp_path, init_cursor=False)
     cursor = {"time": NOW_MS, "floor": NOW_MS - 60_000, "seen": {}}
     (tmp_path / "cursor.json").write_text(json.dumps(cursor))
     h.clock.now_ms = NOW_MS + 8 * DAY_MS
@@ -847,6 +849,94 @@ def test_cursor_file_without_polled(tmp_path):
     h.clock.now_ms = NOW_MS + DAY_MS
     assert h.revoker.poll_once() == 0
     assert h.cursor()["polled"] == NOW_MS + DAY_MS
+
+
+def test_missing_cursor_file_is_fatal(tmp_path):
+    # Starting afresh would skip every event since the last good poll
+    h = Harness(tmp_path, init_cursor=False)
+    h.user_event("UPDATE_PASSWORD", "alice", offset_ms=-1)
+    with pytest.raises(FatalRevokerError, match="no cursor file.*--init-cursor"):
+        h.revoker.poll_once()
+    assert not (tmp_path / "cursor.json").exists()
+    assert h.keycloak.calls() == client_checks()
+
+
+def test_missing_cursor_file_after_a_run_is_fatal(tmp_path):
+    # A wiped state directory, or a changed REVOKER_CURSOR_FILE
+    h = Harness(tmp_path)
+    h.start()
+    (tmp_path / "cursor.json").unlink()
+    h.user_event("UPDATE_PASSWORD", "alice")
+    with pytest.raises(FatalRevokerError, match="no cursor file"):
+        h.revoker.poll_once()
+    assert h.keycloak.calls() == []
+
+
+def test_init_cursor_writes_a_new_cursor(tmp_path):
+    h = Harness(tmp_path)
+    assert not (tmp_path / "cursor.json").exists()
+    assert h.revoker.poll_once() == 0
+    assert h.cursor() == {
+        "time": NOW_MS - 60_000,
+        "floor": NOW_MS - 60_000,
+        "seen": {},
+        "polled": NOW_MS,
+    }
+    # Only the first poll creates it; later ones carry on from it
+    h.clock.now_ms += 15_000
+    h.user_event("UPDATE_PASSWORD", "alice", offset_ms=10_000)
+    assert h.revoker.poll_once() == 1
+    assert h.cursor()["time"] == NOW_MS + 10_000
+
+
+def test_init_cursor_refuses_an_existing_cursor_file(tmp_path):
+    # REVOKER_INIT_CURSOR=1 left in the environment would otherwise restart the
+    # cursor at every restart
+    Harness(tmp_path).start()
+    before = (tmp_path / "cursor.json").read_text()
+    h = Harness(tmp_path)
+    with pytest.raises(FatalRevokerError, match="cursor file exists"):
+        h.revoker.poll_once()
+    assert (tmp_path / "cursor.json").read_text() == before
+
+
+@pytest.mark.parametrize("value,expected", [("1", True), ("0", False), ("", False)])
+def test_init_cursor_setting(tmp_path, value, expected):
+    config = Config.from_env(make_env(tmp_path, REVOKER_INIT_CURSOR=value))
+    assert config.init_cursor is expected
+    with pytest.raises(RevokerError, match="REVOKER_INIT_CURSOR must be 1 or 0"):
+        Config.from_env(make_env(tmp_path, REVOKER_INIT_CURSOR="yes"))
+
+
+def test_main_needs_init_cursor_without_a_cursor_file(tmp_path, monkeypatch, caplog):
+    for name, value in make_env(tmp_path).items():
+        monkeypatch.setenv(name, value)
+    keycloak = FakeKeycloak()
+
+    def make_revoker(config):
+        session = requests.Session()
+        session.mount(KEYCLOAK_URL, keycloak)
+        return Revoker(
+            config,
+            Keycloak(config, session=session),
+            db_factory=FakeDb,
+            clock=Clock(),
+        )
+
+    monkeypatch.setattr(revoker, "Revoker", make_revoker)
+    # Neither the loop nor --once starts without a cursor file
+    assert revoker.main([]) == 1
+    assert revoker.main(["--once"]) == 1
+    assert "no cursor file: first deployment? Run with --init-cursor" in caplog.text
+    assert not (tmp_path / "cursor.json").exists()
+    assert revoker.main(["--once", "--init-cursor"]) == 0
+    assert (tmp_path / "cursor.json").exists()
+    assert revoker.main(["--once"]) == 0
+    # Given again, it fails rather than restart the cursor
+    assert revoker.main(["--once", "--init-cursor"]) == 1
+    with pytest.raises(SystemExit) as exc:
+        revoker.main(["--reconcile", "--init-cursor"])
+    assert exc.value.code == 2
 
 
 class LoopHarness:

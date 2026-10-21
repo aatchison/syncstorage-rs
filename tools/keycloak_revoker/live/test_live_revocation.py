@@ -195,7 +195,7 @@ def test_reconcile_retires_user_deleted_while_revoker_was_down(
     env = revoker_env.but(
         REVOKER_CURSOR_FILE=str(tmp_path / "cursor"), REVOKER_OVERLAP="1"
     )
-    run_revoker(env, "--once")
+    run_revoker(env, "--once", "--init-cursor")
     run_revoker(env, "--once")
     assert_active_record(db, user_id)
     assert exchange(access_token).status_code == 200
@@ -206,6 +206,17 @@ def test_reconcile_retires_user_deleted_while_revoker_was_down(
     output = run_revoker(env, "--reconcile")
     assert f"reconcile: retired keycloak user {user_id}" in output
     assert_retired(db, user_id, access_token)
+
+
+def test_missing_cursor_file_stops_the_revoker(revoker_env, tmp_path):
+    """Without a cursor file the revoker refuses to start, unless asked to."""
+    env = revoker_env.but(REVOKER_CURSOR_FILE=str(tmp_path / "cursor"))
+    output = run_revoker(env, "--once", status=1)
+    assert "no cursor file: first deployment? Run with --init-cursor" in output
+    assert not (tmp_path / "cursor").exists()
+    run_revoker(env.but(REVOKER_INIT_CURSOR="1"), "--once")
+    assert (tmp_path / "cursor").exists()
+    run_revoker(env, "--once")
 
 
 def test_unknown_offline_client_stops_the_revoker(admin, revoker_env, tmp_path):

@@ -138,6 +138,7 @@ def revoker_env(tmp_path_factory, revoker_db_url):
 @pytest.fixture(scope="session")
 def revoker(revoker_env, admin, db):
     """Return a function that runs the revoker, after starting its cursor."""
-    # The first run starts the cursor at the current time
-    run_revoker(revoker_env, "--once")
+    # As on a first deployment: the first run creates the cursor at the
+    # current time
+    run_revoker(revoker_env, "--once", "--init-cursor")
     return lambda *args: run_revoker(revoker_env, *args)

@@ -4,10 +4,12 @@
 """Helpers and constants for the live revocation tests. No fixtures here.
 
 Tokens, passwords and the revoker's environment are held in Secret and
-RevokerEnv, whose repr is masked, and HTTP calls go through `send`, which
-unwraps them only inside it and drops the requests traceback when a call
-fails. So a failing test shows none of them: neither pytest's assertion
-details nor the arguments it prints for each frame of a traceback.
+RevokerEnv, whose repr is masked. A Secret is unwrapped only inside a `try`
+that turns any exception into one naming its type alone, raised `from None`:
+HTTP calls go through `send`, SQL with a secret parameter through `_sql`. So a
+failing test shows none of them: neither pytest's assertion details, nor the
+arguments it prints for each frame of a traceback, nor an exception's message
+(SQLAlchemy's lists the statement's parameters).
 """
 
 import base64
@@ -93,14 +95,16 @@ def send(
 ) -> requests.Response:
     """Send an HTTP request whose data, json and headers may hold Secrets.
 
-    A failed request raises AssertionError without the requests traceback,
-    whose frames would show the unwrapped values.
+    Any failure raises AssertionError without the requests traceback, whose
+    frames would show the unwrapped values, and without the exception's
+    message: not only a RequestException, but also, for example, the
+    ValueError of a header requests refuses.
     """
     try:
         return (session or requests.Session()).request(
             method, url, timeout=10, **reveal(kwargs)
         )
-    except requests.RequestException as e:
+    except Exception as e:
         raise AssertionError(f"{method} {url}: {type(e).__name__}") from None
 
 
@@ -159,13 +163,17 @@ class KeycloakAdmin:
 
 def run_revoker(env: RevokerEnv, *args: str, status: int = 0) -> str:
     """Run revoker.py once with `args`; fail the test unless it exits `status`."""
-    proc = subprocess.run(
-        [sys.executable, REVOKER, *args],
-        env=env,
-        capture_output=True,
-        text=True,
-        timeout=120,
-    )
+    try:
+        proc = subprocess.run(
+            [sys.executable, REVOKER, *args],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+    except Exception as e:
+        # The frames below would show the environment unwrapped
+        raise AssertionError(f"revoker {' '.join(args)}: {type(e).__name__}") from None
     # The revoker logs Keycloak user IDs only, so its output can be shown
     sys.stderr.write(proc.stderr)
     assert proc.returncode == status, (
@@ -176,10 +184,13 @@ def run_revoker(env: RevokerEnv, *args: str, status: int = 0) -> str:
 
 def jwt_payload(token: Secret) -> dict:
     """Decode a JWT's payload without verifying it (to read typ in tests)."""
-    payload = token.value.split(".")[1]
-    claims: dict = json.loads(
-        base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4))
-    )
+    try:
+        payload = token.value.split(".")[1]
+        claims: dict = json.loads(
+            base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4))
+        )
+    except Exception as e:
+        raise AssertionError(f"not a JWT: {type(e).__name__}") from None
     return claims
 
 
@@ -402,22 +413,41 @@ def create_revoker_db_account(db: Any) -> Secret:
     database = url.path.lstrip("/")
     password = Secret(secrets.token_hex(24))
     drop_revoker_db_account(db)
-    db._execute_sql(
-        sqltext(f"CREATE USER '{REVOKER_DB_USER}'@'%' IDENTIFIED BY :password"),
-        password=password.value,
-    ).close()
-    db._execute_sql(
-        sqltext(
-            f"GRANT SELECT, UPDATE ON `{database}`.users TO '{REVOKER_DB_USER}'@'%'"
-        )
-    ).close()
+    _sql(
+        db,
+        f"creating {REVOKER_DB_USER}",
+        f"CREATE USER '{REVOKER_DB_USER}'@'%' IDENTIFIED BY :password",
+        password=password,
+    )
+    _sql(
+        db,
+        f"granting {REVOKER_DB_USER}",
+        f"GRANT SELECT, UPDATE ON `{database}`.users TO '{REVOKER_DB_USER}'@'%'",
+    )
     netloc = f"{REVOKER_DB_USER}:{password.value}@{url.hostname}:{url.port or 3306}"
     return Secret(url._replace(netloc=netloc).geturl())
 
 
 def drop_revoker_db_account(db: Any) -> None:
     """Drop the revoker's MySQL account, if it exists."""
-    db._execute_sql(sqltext(f"DROP USER IF EXISTS '{REVOKER_DB_USER}'@'%'")).close()
+    _sql(
+        db,
+        f"dropping {REVOKER_DB_USER}",
+        f"DROP USER IF EXISTS '{REVOKER_DB_USER}'@'%'",
+    )
+
+
+def _sql(db: Any, what: str, statement: str, **params: Any) -> None:
+    """Run an SQL statement whose parameters may be Secrets.
+
+    A failure raises AssertionError naming `what` and the exception's type
+    only: SQLAlchemy's message lists the parameters, and the frames below this
+    one would show them unwrapped.
+    """
+    try:
+        db._execute_sql(sqltext(statement), **reveal(params)).close()
+    except Exception as e:
+        raise AssertionError(f"{what}: {type(e).__name__}") from None
 
 
 def tokenserver_email(user_id: str) -> str:

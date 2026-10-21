@@ -82,7 +82,15 @@ happens unnoticed, the revoker exits non-zero, with an error that says why:
   `adminEventsEnabled`, with `UPDATE_PASSWORD`, `UPDATE_CREDENTIAL` and
   `DELETE_ACCOUNT` listed in `enabledEventTypes`
 - before a poll, if the last poll that handled every event started longer ago
-  than `eventsExpiration` (the cursor file records when). Password changes in
+  than the realm keeps events, less `REVOKER_OVERLAP` (the cursor file records
+  when). The retention is the shorter of `eventsExpiration` and
+  `REVOKER_ADMIN_EVENTS_EXPIRATION`: Keycloak deletes admin events after the
+  realm attribute `adminEventsExpiration`, separately from user events, and the
+  revoker can't read that attribute (it would need `view-realm`). So unless
+  `adminEventsExpiration` is unset, or at least `eventsExpiration`, set
+  `REVOKER_ADMIN_EVENTS_EXPIRATION` to it; otherwise an outage longer than the
+  admin-event retention loses every admin password reset, update and deletion
+  without an error. Password changes in
   that gap may never be acted on. Sign every user out (the realm's "Sign out
   all active sessions", which sets the realm's `notBefore`), run `--reconcile`
   for the deletions, then delete the cursor file and start the revoker once
@@ -131,6 +139,7 @@ All from environment variables.
 | `REVOKER_CLIENT_SECRET` | | The client's secret, if there is no file |
 | `REVOKER_OFFLINE_CLIENTS` | `SYNC_TOKENSERVER__OIDC_ALLOWED_CLIENTS` | Comma-separated IDs of the clients Thunderbird signs in with, whose offline sessions are revoked |
 | `REVOKER_CURSOR_FILE` | (required) | The cursor file. Its directory must be writable |
+| `REVOKER_ADMIN_EVENTS_EXPIRATION` | | The realm's `adminEventsExpiration`, in seconds, if it is set and shorter than `eventsExpiration`. Unset or 0: admin events are kept at least as long as user events. See "Lost events" |
 | `REVOKER_INIT_CURSOR` | 0 | `1`: the same as `--init-cursor`. Remove it again once the cursor exists |
 | `REVOKER_INTERVAL` | 15 | Seconds between polls |
 | `REVOKER_OVERLAP` | 60 | Seconds each poll looks back before the cursor, and a first start before the current time. Must exceed the worst clock skew, see "Cursor" |
@@ -158,6 +167,11 @@ The realm must store events:
   retention that fits your privacy policy. `--reconcile` covers deletions
   whatever the retention
 - `adminEventsEnabled: true`. `adminEventsDetailsEnabled` isn't needed
+- the realm attribute `adminEventsExpiration` (the admin console's "Realm
+  settings", "Events", "Admin events settings", "Expiration") unset, or at
+  least `eventsExpiration`. If it is shorter, give its value as
+  `REVOKER_ADMIN_EVENTS_EXPIRATION`: the revoker can't read it (see "Lost
+  events"). The dev realm doesn't set it
 
 The revoker authenticates as the service account of a confidential client with
 only the client-credentials grant, whose service account has the

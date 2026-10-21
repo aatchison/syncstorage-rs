@@ -207,6 +207,9 @@ class Config:
     reconcile_max: int = 10
     max_failures: int = 5
     init_cursor: bool = False
+    # The realm's adminEventsExpiration in seconds, which the revoker can't
+    # read; None: admin events are kept at least as long as user events
+    admin_events_expiration: Optional[int] = None
 
     @classmethod
     def from_env(cls, env: Mapping[str, str]) -> "Config":
@@ -259,9 +262,16 @@ class Config:
             reconcile_max=_env_int(env, "REVOKER_RECONCILE_MAX", 10),
             max_failures=_env_int(env, "REVOKER_MAX_FAILURES", 5),
             init_cursor=_env_flag(env, "REVOKER_INIT_CURSOR"),
+            admin_events_expiration=_env_int(env, "REVOKER_ADMIN_EVENTS_EXPIRATION", 0)
+            or None,
         )
         if config.max_failures < 1:
             raise RevokerError("REVOKER_MAX_FAILURES must be at least 1")
+        if (
+            config.admin_events_expiration is not None
+            and config.admin_events_expiration < 0
+        ):
+            raise RevokerError("REVOKER_ADMIN_EVENTS_EXPIRATION must not be negative")
         # database.py reads the URL itself; check it here so a missing URL fails
         # at startup rather than at the first deletion
         required("SYNC_TOKENSERVER__DATABASE_URL")
@@ -588,7 +598,7 @@ class Revoker:
         self._checked = False
         # Create the cursor at the first poll, rather than load it
         self._init_cursor = config.init_cursor
-        # How long the realm keeps user events, in ms; None: for ever
+        # How long the realm keeps both kinds of events, in ms; None: for ever
         self._events_expiration_ms: Optional[int] = None
 
     @property
@@ -637,11 +647,18 @@ class Revoker:
                 "the realm doesn't store these user events (enabledEventTypes): "
                 + ", ".join(missing)
             )
-        expiration = events.get("eventsExpiration")
-        if isinstance(expiration, int) and expiration > 0:
-            self._events_expiration_ms = expiration * 1000
-        else:
-            self._events_expiration_ms = None
+        # Keycloak deletes admin events after the realm's adminEventsExpiration,
+        # which the revoker can't read without view-realm: the setting stands
+        # in for it. The shorter of the two bounds how long a gap may be.
+        expirations = [
+            e
+            for e in (
+                events.get("eventsExpiration"),
+                self.config.admin_events_expiration,
+            )
+            if isinstance(e, int) and not isinstance(e, bool) and e > 0
+        ]
+        self._events_expiration_ms = min(expirations) * 1000 if expirations else None
         for client_id in self.config.offline_clients:
             self.keycloak.check_offline_client(client_id)
         self._checked = True
@@ -664,13 +681,20 @@ class Revoker:
         else:
             cursor = Cursor.load(self.config.cursor_file)
         expiration_ms = self._events_expiration_ms
-        if expiration_ms is not None and now_ms - cursor.polled > expiration_ms:
+        # Less the overlap: an event stamped just before `polled` but stored
+        # late, or a Keycloak cleanup whose clock runs ahead, needs the margin
+        if (
+            expiration_ms is not None
+            and now_ms - cursor.polled > expiration_ms - overlap_ms
+        ):
             raise FatalRevokerError(
                 f"the last complete poll was {(now_ms - cursor.polled) / 3_600_000:.1f}"
                 " h ago, longer than the realm keeps events "
-                f"({expiration_ms / 3_600_000:.1f} h): events may have been lost. "
-                "Sign every user out (the realm's 'Sign out all active sessions'), "
-                "run --reconcile, then delete the cursor file to start again"
+                f"({expiration_ms / 3_600_000:.1f} h, the shorter of eventsExpiration "
+                "and REVOKER_ADMIN_EVENTS_EXPIRATION) less REVOKER_OVERLAP: events "
+                "may have been lost. Sign every user out (the realm's 'Sign out all "
+                "active sessions'), run --reconcile, then delete the cursor file and "
+                "start again with --init-cursor"
             )
         since = max(cursor.time - overlap_ms, cursor.floor)
         events = [("user", e) for e in self.keycloak.user_events(since)]

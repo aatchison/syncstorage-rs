@@ -800,9 +800,68 @@ def test_gap_within_event_retention_is_fine(tmp_path):
     h = Harness(tmp_path)
     h.start()
     h.user_event("UPDATE_PASSWORD", "alice")
-    h.clock.now_ms = h.cursor()["polled"] + 7 * DAY_MS
+    # The retention less the overlap, the most the gap may be
+    h.clock.now_ms = h.cursor()["polled"] + 7 * DAY_MS - 60_000
     assert h.revoker.poll_once() == 1
     assert h.cursor()["polled"] == h.clock.now_ms
+
+
+@pytest.mark.parametrize("gap_ms", [7 * DAY_MS - 60_000 + 1, 7 * DAY_MS])
+def test_gap_within_the_overlap_of_the_retention_is_fatal(tmp_path, gap_ms):
+    # An event stamped just before the last poll but stored late may already
+    # be gone, or Keycloak's cleanup may run on a clock ahead of the revoker's
+    h = Harness(tmp_path)
+    h.start()
+    h.clock.now_ms = h.cursor()["polled"] + gap_ms
+    with pytest.raises(FatalRevokerError, match="less REVOKER_OVERLAP"):
+        h.revoker.poll_once()
+
+
+@pytest.mark.parametrize(
+    "events_expiration,admin_expiration,limit_ms",
+    [
+        # Admin events kept 1 day, user events 7: the admin events bound it
+        (604800, "86400", DAY_MS),
+        # Admin events kept longer than user events: the user events bound it
+        (86400, "604800", DAY_MS),
+        # User events kept for ever, admin events 2 days
+        (None, "172800", 2 * DAY_MS),
+        # Unset or 0: admin events last as long as user events
+        (604800, None, 7 * DAY_MS),
+        (604800, "0", 7 * DAY_MS),
+    ],
+    ids=["admin-shorter", "user-shorter", "user-forever", "unset", "zero"],
+)
+def test_gap_uses_the_shorter_retention(
+    tmp_path, events_expiration, admin_expiration, limit_ms
+):
+    h = Harness(tmp_path)
+    h.config.admin_events_expiration = Config.from_env(
+        make_env(tmp_path, REVOKER_ADMIN_EVENTS_EXPIRATION=admin_expiration)
+    ).admin_events_expiration
+    if events_expiration is None:
+        del h.keycloak.events_config["eventsExpiration"]
+    else:
+        h.keycloak.events_config["eventsExpiration"] = events_expiration
+    h.start()
+    polled = h.cursor()["polled"]
+    h.clock.now_ms = polled + limit_ms - 60_000
+    assert h.revoker.poll_once() == 0
+    h.clock.now_ms += limit_ms - 60_000 + 1
+    with pytest.raises(FatalRevokerError, match="events may have been lost"):
+        h.revoker.poll_once()
+
+
+def test_admin_events_expiration_setting(tmp_path):
+    assert Config.from_env(make_env(tmp_path)).admin_events_expiration is None
+    config = Config.from_env(
+        make_env(tmp_path, REVOKER_ADMIN_EVENTS_EXPIRATION="86400")
+    )
+    assert config.admin_events_expiration == 86400
+    with pytest.raises(RevokerError, match="REVOKER_ADMIN_EVENTS_EXPIRATION"):
+        Config.from_env(make_env(tmp_path, REVOKER_ADMIN_EVENTS_EXPIRATION="1d"))
+    with pytest.raises(RevokerError, match="must not be negative"):
+        Config.from_env(make_env(tmp_path, REVOKER_ADMIN_EVENTS_EXPIRATION="-1"))
 
 
 def test_quiet_realm_is_no_gap(tmp_path):

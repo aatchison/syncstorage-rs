@@ -21,7 +21,7 @@ settings are in [docs/src/config.md](../docs/src/config.md) under "OIDC mode
 
 We use rootless podman, not Docker, on this branch: the devcontainer and the
 MySQL and Keycloak test containers all run under podman, and
-`start-services.sh` calls `podman` directly. The Makefile's compose targets
+[`start-services.sh`](start-services.sh) calls `podman` directly. The Makefile's compose targets
 and the `devcontainer` CLI call `docker`, so on a podman host they need a
 `docker` command that runs podman (the `podman-docker` package) or, for the
 devcontainer CLI, `--docker-path podman`.

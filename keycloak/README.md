@@ -19,6 +19,13 @@ settings are in [docs/src/config.md](../docs/src/config.md) under "OIDC mode
 | `docker/docker-compose.mysql.keycloak.yaml` | Overlay for a syncserver and Keycloak dev stack |
 | `docker/docker-compose.e2e.mysql.keycloak.yaml` | Overlay that runs the integration tests in compose |
 
+We use rootless podman, not Docker, on this branch: the devcontainer and the
+MySQL and Keycloak test containers all run under podman, and
+`start-services.sh` calls `podman` directly. The Makefile's compose targets
+and the `devcontainer` CLI call `docker`, so on a podman host they need a
+`docker` command that runs podman (the `podman-docker` package) or, for the
+devcontainer CLI, `--docker-path podman`.
+
 ## Build
 
 OIDC mode uses the native token verifier, so build without `py_verifier`. A
